@@ -19,9 +19,25 @@ function load_time_data(
     period_index::Int = 1
 )
     path = rel_or_abs_path(path, rel_path)
-    if isdir(path)
-        path = joinpath(path, "time_data.json")
+    
+    if GLOBAL_TDR_FLAG[] == 1
+        tdr_dir = abspath(joinpath(rel_path, "TDR_results"))
+        tdr_timefile = joinpath(tdr_dir, "time_data.json")
+
+        if !isfile(tdr_timefile)
+            error("TDR is enabled but reduced time_data.json not found at $tdr_timefile")
+        end
+
+        @info "TDR active → loading reduced time_data.json from $tdr_timefile"
+        path = tdr_timefile
+    else
+        # Handle original directory form (system/)
+        if isdir(path)
+            path = joinpath(path, "time_data.json")
+        end
+        @info "TDR disabled → loading original time_data.json from $path"
     end
+
     # read in the list of commodities from the data directory
     isfile(path) || error("Time data not found at $(abspath(path))")
 
