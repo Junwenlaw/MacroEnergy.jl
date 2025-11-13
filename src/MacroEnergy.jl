@@ -12,6 +12,7 @@ using InteractiveUtils
 using Printf: @printf
 using MacroEnergyScaling
 using MacroEnergySolvers
+using MacroEnergyTimeReduction
 using Pkg
 using DistributedArrays
 using Distributed
@@ -20,6 +21,7 @@ using GitHub
 using Markdown
 using Logging
 using LoggingExtras
+using StatsBase
 
 import MacroEnergyScaling: scale_constraints!
 import JuMP: set_optimizer, set_optimizer_attributes
@@ -135,6 +137,7 @@ end
 
 # include files
 include_all_in_folder("utilities")
+include_all_in_folder("time_domain_reduction")
 
 include("model/units.jl")
 include("model/time_management.jl")
@@ -298,6 +301,7 @@ export AbstractAsset,
     write_costs,
     write_dataframe,
     write_duals,
+    write_time_weights,
     write_flow,
     write_results,
     template_system,

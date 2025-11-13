@@ -136,5 +136,7 @@ function write_outputs(results_dir::AbstractString,
         write_duals(results_dir, system, scaling)
     end
 
+    write_time_weights(results_dir, system)
+
     return nothing
 end

@@ -1,3 +1,5 @@
+const GLOBAL_TDR_FLAG = Ref(0) 
+
 function run_case(
     case_path::AbstractString=@__DIR__;
     lazy_load::Bool=true,
@@ -30,6 +32,32 @@ function run_case(
         create_user_additions_module(case_path)
         additions_path = user_additions_module_path(case_path)
         load_user_additions(additions_path)
+
+        # Time Domain Reduction
+        tdr_settings_file = joinpath(case_path, "system", "TDR_settings.json")
+
+        if isfile(tdr_settings_file)
+            @info "Detected TDR_settings.json"
+            try
+                TDRsetup = JSON3.read(open(tdr_settings_file, "r"))
+                TDR_flag = get(TDRsetup, "TimeDomainReduction", 0)
+                GLOBAL_TDR_FLAG[] = TDR_flag 
+
+                if TDR_flag == 1
+                    @info "Time Domain Reduction Enabled"
+                    run_time_domain_reduction(case_path; v=true)
+                else
+                    @info "Time Domain Reduction Disabled"
+                end
+            catch e
+                @error "Failed to read or parse TDR_settings.json: $(e)"
+                rethrow(e)
+            end
+        else
+            @debug "No TDR_settings.json found — skipping time domain reduction"
+            GLOBAL_TDR_FLAG[] = 0
+        end
+
 
         case = load_case(case_path; lazy_load=lazy_load)
 
