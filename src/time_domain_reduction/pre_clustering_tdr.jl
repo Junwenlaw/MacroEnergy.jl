@@ -8,6 +8,7 @@ function pre_clustering_tdr(case_path::String, myTDRsetup::Dict; v::Bool=false)
     ClusterAvailability = myTDRsetup["ClusterAvailability"]
     ClusterDemand = myTDRsetup["ClusterDemand"]
     ClusterFuelPrices = myTDRsetup["ClusterFuelPrices"]
+    ClusterSubperiodResults = myTDRsetup["ClusterSubperiodResults"]
 
     ###################################################################
     ################### Step 1 - Load System Inputs ###################
@@ -17,25 +18,34 @@ function pre_clustering_tdr(case_path::String, myTDRsetup::Dict; v::Bool=false)
 
     system_path = joinpath(case_path, "system")
     tdr_output_path = joinpath(system_path, myTDRsetup["TimeDomainReductionFolder"])
-    
-    availability = demand = fuel_prices = DataFrame()
 
-    if myTDRsetup["ClusterAvailability"] == 1
+    availability = DataFrame()
+    demand = DataFrame()
+    fuel_prices = DataFrame()
+    subperiod_results = DataFrame()
+
+    if ClusterAvailability == 1
         avail_path = joinpath(system_path, myTDRsetup["AvailabilityFileName"])
         availability = DataFrame(CSV.File(avail_path))
         if v println("Loaded availability $(size(availability)) from $avail_path") end
     end
 
-    if myTDRsetup["ClusterDemand"] == 1
+    if ClusterDemand == 1
         demand_path = joinpath(system_path, myTDRsetup["DemandFileName"])
         demand = DataFrame(CSV.File(demand_path))
         if v println("Loaded demand $(size(demand)) from $demand_path") end
     end
 
-    if myTDRsetup["ClusterFuelPrices"] == 1
+    if ClusterFuelPrices == 1
         fuel_path = joinpath(system_path, myTDRsetup["FuelPricesFileName"])
         fuel_prices = DataFrame(CSV.File(fuel_path))
         if v println("Loaded fuel_prices $(size(fuel_prices)) from $fuel_path") end
+    end
+
+    if ClusterSubperiodResults == 1
+        subperiod_results_path = joinpath(system_path, "Subperiod_Results.csv")
+        subperiod_results = DataFrame(CSV.File(subperiod_results_path))
+        if v println("Loaded subperiod_results $(size(subperiod_results)) from $subperiod_results_path") end
     end
 
     println("=== Completed ===") 
@@ -53,15 +63,18 @@ function pre_clustering_tdr(case_path::String, myTDRsetup::Dict; v::Bool=false)
     drop_time_columns!(availability)
     drop_time_columns!(demand)
     drop_time_columns!(fuel_prices)
+    drop_time_columns!(subperiod_results)
+
 
     # Combine active DataFrames into one clustering matrix
     dfs_to_combine = []
     if ClusterAvailability == 1 push!(dfs_to_combine, availability) end
     if ClusterDemand == 1 push!(dfs_to_combine, demand) end
     if ClusterFuelPrices == 1 push!(dfs_to_combine, fuel_prices) end
+    if ClusterSubperiodResults == 1 push!(dfs_to_combine, subperiod_results) end
 
     if isempty(dfs_to_combine)
-        error("No active time series selected for clustering. Enable at least one of ClusterAvailability, ClusterDemand, or ClusterFuelPrices in TDR_settings.json.")
+        error("No active time series selected for clustering. Enable at least one of ClusterAvailability, ClusterDemand, ClusterFuelPrices, or ClusterSubperiodResults in TDR_settings.json.")
     end
 
     full_df = hcat(dfs_to_combine...)
@@ -131,10 +144,12 @@ function pre_clustering_tdr(case_path::String, myTDRsetup::Dict; v::Bool=false)
     # Identify main column groups
     demand_col_names = [string(c) for c in names(InputData)
         if occursin("load", lowercase(string(c))) || occursin("demand", lowercase(string(c)))]
-    solar_col_names  = [string(c) for c in names(InputData)
-        if occursin("pv", lowercase(string(c))) || occursin("solar", lowercase(string(c)))]
-    wind_col_names   = [string(c) for c in names(InputData)
-        if occursin("wind", lowercase(string(c)))]
+
+        solar_col_names = [string(c) for c in names(InputData)
+            if (occursin("pv", lowercase(string(c))) || occursin("solar", lowercase(string(c)))) && !occursin("edge", lowercase(string(c)))]
+        
+        wind_col_names = [string(c) for c in names(InputData)
+            if occursin("wind", lowercase(string(c))) && !occursin("edge", lowercase(string(c)))]        
 
     # Group by period (e.g., week)
     cgdf = combine(groupby(InputData, :Group), [c .=> sum for c in ColNames])
