@@ -138,13 +138,34 @@ function run_case(
                 GLOBAL_TDR_FLAG[] = TDR_flag 
 
                 if TDR_flag == 1
+
                     @info "Time Domain Reduction Enabled"
+
+                    # Cluster Subperiod Results: Incorporate Output-based TDR subperiod CEM stage
+                    if get(TDRsetup, "ClusterSubperiodResults", 0) == 1
+                        @info "Include subperiod cases results in TDR"
+                        
+                        # Path to combined subperiod results
+                        system_path = joinpath(case_path, "system")
+                        combined_file = joinpath(system_path, TDRsetup["ClusterSubperiodFileName"])
+
+                        # If file exists, skip subperiod runs
+                        if isfile(combined_file)
+                            @info "Subperiod results already exist, skipping subperiod runs"
+
+                        else
+                            @info "Generating subperiod results for clustering"
+                            run_subperiod_cases(case_path, optimizer, optimizer_env, optimizer_attributes; v=true)
+                            @info "Finished generating subperiod flow matrices"
+                        end
+                    end
+
                     run_time_domain_reduction(case_path; v=true)
                 else
                     @info "Time Domain Reduction Disabled"
                 end
             catch e
-                @error "Failed to read or parse TDR_settings.json: $(e)"
+                @error "TDR Failed, possible issue with TDR_settings.json: $(e)"
                 rethrow(e)
             end
         else

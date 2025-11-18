@@ -13,28 +13,53 @@ function run_time_domain_reduction(case_path::String; v::Bool=false)
     raw_setup = JSON3.read(json_text)
     myTDRsetup = to_string_keys(raw_setup)
 
-    # Folder path for outputs
+    # Check for existing files to skip running TDR
+
     tdr_output_path = joinpath(system_path, myTDRsetup["TimeDomainReductionFolder"])
-    
-    # If TDR output folder already exists, skip running TDR
-    if isdir(tdr_output_path)
-        @info "TDR results folder already exists at: $tdr_output_path"
-        @info "Using existing TDR results"
+    required_files = String[]
+
+    # Add required files based on user settings
+    if myTDRsetup["ClusterAvailability"] == 1
+        push!(required_files, myTDRsetup["AvailabilityFileName"])
+    end
+
+    if myTDRsetup["ClusterDemand"] == 1
+        push!(required_files, myTDRsetup["DemandFileName"])
+    end
+
+    if myTDRsetup["ClusterFuelPrices"] == 1
+        push!(required_files, myTDRsetup["FuelPricesFileName"])
+    end
+
+    # Check each required file inside the TDR folder
+    all_exist = true
+    for fname in required_files
+        fpath = joinpath(tdr_output_path, fname)
+        if !isfile(fpath)
+            @info "Missing TDR input file: $fpath"
+            all_exist = false
+        end
+    end
+
+    if all_exist && isdir(tdr_output_path)
+        @info "All required TDR files exist in: $tdr_output_path"
+        @info "Skipping TDR computation and using existing files"
         return nothing
     else
+        @info "Initializing full TDR"
         mkpath(tdr_output_path)
-        @info "Initializing TDR"
     end
 
     if v
         println("TDR Settings loaded from: ", tdr_settings_path)
-        println("    TimestepsPerRepPeriod : ", myTDRsetup["TimestepsPerRepPeriod"])
-        println("    NumberOfSubperiods    : ", myTDRsetup["NumberOfSubperiods"])
-        println("    ClusterMethod         : ", myTDRsetup["ClusterMethod"])
-        println("    ScalingMethod         : ", myTDRsetup["ScalingMethod"])
-        println("    UseExtremePeriods     : ", myTDRsetup["UseExtremePeriods"])
-        println("    TotalHoursModeled     : ", myTDRsetup["TotalHoursModeled"])
-        println("    Output folder         : ", tdr_output_path)
+        println("    TimestepsPerRepPeriod       : ", myTDRsetup["TimestepsPerRepPeriod"])
+        println("    NumberOfSubperiods          : ", myTDRsetup["NumberOfSubperiods"])
+        println("    ClusterMethod               : ", myTDRsetup["ClusterMethod"])
+        println("    ScalingMethod               : ", myTDRsetup["ScalingMethod"])
+        println("    UseExtremePeriods           : ", myTDRsetup["UseExtremePeriods"])
+        println("    ClusterSubperiodResults     : ", myTDRsetup["ClusterSubperiodResults"])
+        println("    TotalHoursModeled           : ", myTDRsetup["TotalHoursModeled"])
+        println("    Output folder               : ", tdr_output_path)
         println()
     end
 
