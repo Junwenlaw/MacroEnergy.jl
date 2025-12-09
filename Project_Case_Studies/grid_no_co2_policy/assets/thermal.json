@@ -1,0 +1,64 @@
+{
+    "ThermalPower": {
+        "global_data": {
+            "transforms": {
+                "constraints": {
+                    "BalanceConstraint": true
+                }
+            },
+            "edges": {
+                "co2_edge": {
+                    "unidirectional": true,
+                    "has_capacity": false
+                },
+                "elec_edge": {
+                    "unidirectional": true,
+                    "has_capacity": true
+                },
+                "fuel_edge": {
+                    "unidirectional": true,
+                    "has_capacity": false
+                }
+            }
+        },
+        "instance_data": [
+            {
+                "transforms": {
+                    "timedata": "NaturalGas",
+                    "fuel_consumption": 5,
+                    "emission_rate": 0.253
+                },
+                "id": "Minigrid_Diesel_Backup",
+                "edges": {
+                    "co2_edge": {
+                        "end_vertex": "co2_sink",
+                        "commodity": "CO2"
+                    },
+                    "elec_edge": {
+                        "can_retire": true,
+                        "max_capacity": -1,
+                        "can_expand": true,
+                        "constraints": {
+                            "CapacityConstraint": true
+                        },
+                        "commodity": "Electricity",
+                        "fixed_om_cost": 33867,
+                        "uc": true,
+                        "end_vertex": "elec_node",
+                        "annualized_investment_cost": 207576,
+                        "variable_om_cost": 0,
+                        "capacity_size": 1,
+                        "availability": [
+                            1
+                        ]
+                    },
+                    "fuel_edge": {
+                        "start_vertex": "diesel_source",
+                        "commodity": "NaturalGas"
+                    }
+                }
+            }
+        ],
+        "type": "ThermalPower"
+    }
+}

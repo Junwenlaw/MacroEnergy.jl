@@ -1,0 +1,83 @@
+{
+    "nodes": [
+        {
+            "global_data": {
+                "constraints": {
+                    "MaxNonServedDemandConstraint": true,
+                    "MaxNonServedDemandPerSegmentConstraint": true,
+                    "BalanceConstraint": true
+                },
+                "max_nsd": [
+                    1
+                ],
+                "time_interval": "Electricity",
+                "price_nsd": [
+                    50000
+                ]
+            },
+            "instance_data": [
+                {
+                    "demand": {
+                        "timeseries": {
+                            "header": "Elec_Demand",
+                            "path": "system/demand.csv"
+                        }
+                    },
+                    "id": "elec_node"
+                }
+            ],
+            "type": "Electricity"
+        },
+        {
+            "global_data": {
+                "time_interval": "Electricity"
+            },
+            "instance_data": [
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "Grid_Elec_Price",
+                            "path": "system/fuel_prices.csv"
+                        }
+                    },
+                    "id": "grid_elec_node"
+                }
+            ],
+            "type": "Electricity"
+        },
+        {
+            "global_data": {
+                "time_interval": "NaturalGas"
+            },
+            "instance_data": [
+                {
+                    "price": {
+                        "timeseries": {
+                            "header": "Diesel_Price",
+                            "path": "system/fuel_prices.csv"
+                        }
+                    },
+                    "id": "diesel_source"
+                }
+            ],
+            "type": "NaturalGas"
+        },
+        {
+            "global_data": {
+                "time_interval": "CO2"
+            },
+            "instance_data": [
+                {
+                    "constraints": {
+                        "CO2CapConstraint": false
+                    },
+                    "rhs_policy": {
+                        "CO2CapConstraint": 0
+                    },
+                    "id": "co2_sink"
+                }
+            ],
+            "type": "CO2"
+        }
+    ]
+}

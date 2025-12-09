@@ -1,0 +1,61 @@
+{
+    "GridElectricityPurchase": [
+        {
+            "type": "GridElectricity",
+
+            "global_data": {
+                "transforms": {
+                    "timedata": "Electricity",
+                    "constraints": {
+                        "BalanceConstraint": true
+                    },
+                    "emission_rate": 0.208
+                },
+
+                "edges": {
+                    "grid_elec_edge": {
+                        "commodity": "Electricity",
+                        "unidirectional": true,
+                        "has_capacity": false
+                    },
+
+                    "elec_edge": {
+                        "commodity": "Electricity",
+                        "unidirectional": true,
+                        "has_capacity": false
+                    },
+
+                    "co2_edge": {
+                        "commodity": "CO2",
+                        "unidirectional": true,
+                        "has_capacity": false,
+                        "end_vertex": "co2_sink"
+                    }
+                }
+            },
+
+            "instance_data": [
+                {
+                    "id": "Grid_Minigrid_Interface",
+
+                    "edges": {
+                        "grid_elec_edge": {
+                            "commodity": "Electricity",
+                            "start_vertex": "grid_elec_node"
+                        },
+
+                        "elec_edge": {
+                            "commodity": "Electricity",
+                            "end_vertex": "elec_node"
+                        },
+
+                        "co2_edge": {
+                            "commodity": "CO2",
+                            "end_vertex": "co2_sink"
+                        }
+                    }
+                }
+            ]
+        }
+    ]
+}
