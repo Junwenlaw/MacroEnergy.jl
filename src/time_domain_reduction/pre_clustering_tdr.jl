@@ -121,6 +121,11 @@ function pre_clustering_tdr(case_path::String, mysetup::Dict; period_idx::Int = 
         println()
     end
 
+    # Force all columns to Float64 to avoid issues
+    for c in ColNames
+        InputData[!, c] = Float64.(InputData[!, c])
+    end
+
     # Normalize or standardize directly column by column (keeping names)
     if ScalingMethod == "N"
         normProfiles = [StatsBase.transform(fit(UnitRangeTransform, InputData[!, ColNames[c]]; dims=1, unit=true),InputData[!, ColNames[c]]) for c in 1:length(ColNames)]
