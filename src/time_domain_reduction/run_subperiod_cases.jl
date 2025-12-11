@@ -96,77 +96,83 @@ function run_subperiod_cases(
         mkpath(sub_results_dir)
 
         #Turn off logging
-        with_logger(NullLogger()) do
+    
 
-            # Load the original case once
-            case = load_case(case_path; lazy_load=true)
+        # Load the original case once
+        full_case = load_case(case_path; lazy_load=true)
 
-            # Build solver
-            opt = create_optimizer(optimizer, optimizer_env, optimizer_attributes)
+        # Build solver
+        opt = create_optimizer(optimizer, optimizer_env, optimizer_attributes)
 
-            # Apply full-year scaling manually
-            weight_per_hour = T_full / TimestepsPerRepPeriod
+        # Apply full-year scaling manually
+        weight_per_hour = T_full / TimestepsPerRepPeriod
 
-            # Loop over subperiods (Can add distributed here)
-            for sp = 1:num_sub
-                t_range = ranges[sp]
-                println("Running $sp / $(length(ranges)) subperiods t = $t_range")
+        # Run subperiods of period s in multi-period system
+        if num_periods > 1
+            case_s = Case([full_case.systems[s]], full_case.settings)
+        else
+            case_s = full_case
+        end
+
+        # Loop over subperiods (Can add distributed here)
+        for sp = 1:num_sub
+            t_range = ranges[sp]
+            println("Running $sp / $(length(ranges)) subperiods t = $t_range")
+            println()
+
+            # Deep copy the case for this subperiod run
+            case_sub = deepcopy(case_s)
+
+            if SubperiodPolicyConstraints == 0
+                println("Disabling all policy constraints for subperiod cases.")
                 println()
 
-                # Deep copy the case for this subperiod run
-                case_sub = deepcopy(case)
-
-                if SubperiodPolicyConstraints == 0
-                    println("Disabling all policy constraints for subperiod cases.")
-                    println()
-
-                    for sys in case_sub.systems
-                        disable_policy_constraints!(sys)
-                    end
-                end
-            
-                # Restrict time_data for each commodity
                 for sys in case_sub.systems
-                    for c in keys(sys.time_data)
-                        td = sys.time_data[c]
-                        td.time_interval = t_range
-                        td.subperiods = [t_range]
-                        td.subperiod_indices = [1]
-                        td.subperiod_weights = Dict(1 => weight_per_hour)
-                        td.subperiod_map = Dict(t => 1 for t in t_range)
-                        td.period_index = 1
-                    end
+                    disable_policy_constraints!(sys)
                 end
-
-                # Solve this subperiod
-                solve_start = time()
-                (_, sol_sub) = solve_case(case_sub, opt)
-                solve_time = time() - solve_start
-                println("Subperiod $sp solved in $(round(solve_time; digits=2)) seconds")
-
-                # Prepare subperiod folder
-                sp_folder = joinpath(sub_results_dir, "sub_$(lpad(string(sp), 3, '0'))")
-                mkpath(sp_folder)
-
-                # Raw results
-                write_subperiod_results(case_sub, sp_folder)
-
-                # Extract time series results of specified commodities/assets in TDR_settings.json file for TDR input
-                write_subperiod_results(case_sub, sp_folder, sub_cfg, mysetup)
-
-                # Debugging outputs (availability + demand)
-                if v
-                    system_sub = case_sub.systems[1]
-                    write_subperiod_availability(system_sub, sp_folder)
-                    write_subperiod_demand(system_sub, sp_folder)
+            end
+        
+            # Restrict time_data for each commodity
+            for sys in case_sub.systems
+                for c in keys(sys.time_data)
+                    td = sys.time_data[c]
+                    td.time_interval = t_range
+                    td.subperiods = [t_range]
+                    td.subperiod_indices = [1]
+                    td.subperiod_weights = Dict(1 => weight_per_hour)
+                    td.subperiod_map = Dict(t => 1 for t in t_range)
+                    td.period_index = s
                 end
             end
 
-            #Merge individual subperiod time series results into a combined dataframe for TDR input
-            merge_subperiod_results_to_timeseries(case_path, mysetup; period_idx = s)
-            
-            @info "Finished generating subperiod flow matrices period $s"
+            # Solve this subperiod
+            solve_start = time()
+            (_, sol_sub) = solve_case(case_sub, opt)
+            solve_time = time() - solve_start
+            println("Subperiod $sp solved in $(round(solve_time; digits=2)) seconds")
+
+            # Prepare subperiod folder
+            sp_folder = joinpath(sub_results_dir, "sub_$(lpad(string(sp), 3, '0'))")
+            mkpath(sp_folder)
+
+            # Raw results
+            write_subperiod_results(case_sub, sp_folder)
+
+            # Extract time series results of specified commodities/assets in TDR_settings.json file for TDR input
+            write_subperiod_results(case_sub, sp_folder, sub_cfg, mysetup)
+
+            # Debugging outputs (availability + demand)
+            if v
+                system_sub = case_sub.systems[1]
+                write_subperiod_availability(system_sub, sp_folder)
+                write_subperiod_demand(system_sub, sp_folder)
+            end
         end
+
+        #Merge individual subperiod time series results into a combined dataframe for TDR input
+        merge_subperiod_results_to_timeseries(case_path, mysetup; period_idx = s)
+        
+        @info "Finished generating subperiod flow matrices period $s"
     end
 
     GLOBAL_TDR_FLAG[] = 1
