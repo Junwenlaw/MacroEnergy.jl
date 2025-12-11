@@ -1,4 +1,4 @@
-function clustering_tdr(tdr_output_path, myTDRsetup, ClusteringInputDF, NClusters; v::Bool=false)
+function clustering_tdr(tdr_output_path, myTDRsetup, ClusteringInputDF, NClusters; period_idx::Int = 1, v::Bool=false)
     
     println("=== Step 5: Clustering ===")
 
@@ -15,7 +15,7 @@ function clustering_tdr(tdr_output_path, myTDRsetup, ClusteringInputDF, NCluster
     println("TimestepsPerRepPeriod = $TimestepsPerRepPeriod")
     println("NumberOfSubperiods = $NumberOfSubperiods")
 
-    push!(cluster_results, cluster(tdr_output_path, myTDRsetup, ClusterMethod, ClusteringInputDF, NClusters, nReps, false))
+    push!(cluster_results, cluster(tdr_output_path, myTDRsetup, ClusterMethod, ClusteringInputDF, NClusters, nReps; period_idx = period_idx, v=v))
 
     # Interpret Final Clustering Result
     R = last(cluster_results)[1]  # Cluster Object
@@ -23,7 +23,9 @@ function clustering_tdr(tdr_output_path, myTDRsetup, ClusteringInputDF, NCluster
     W = last(cluster_results)[3]  # Weights
     M = last(cluster_results)[4]  # Centers or Medoids
     DistMatrix = last(cluster_results)[5]  # Pairwise distances
-
+    autoencoder_training_time = last(cluster_results)[6]
+    clustering_time = last(cluster_results)[7]
+    
     if v
         println("Sum(W): Total Cluster Weights: ", sum(W))
     end
