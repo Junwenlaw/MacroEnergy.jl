@@ -21,7 +21,7 @@ function load_json_inputs(file_path::AbstractString; rel_path::AbstractString=di
     # if isempty(json_data)
     #     return Dict{Symbol, Any}(:path => file_path)
     # end
-    if !lazy_load
+    if !lazy_load || GLOBAL_TDR_FLAG[] == 1
         json_data = eager_load_json_inputs(json_data, rel_path)
         # if isempty(json_data)
         #     return Dict{Symbol, Any}(:path => file_path)

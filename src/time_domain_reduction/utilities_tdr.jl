@@ -145,6 +145,7 @@ function write_time_data_json(system_path::String,
                               TimestepsPerRepPeriod::Int,
                               NumberOfSubperiods::Int,
                               TotalHoursModeled::Int;
+                              period_idx::Int = 1,
                               v::Bool=false)
 
     # Load commodities file
@@ -186,14 +187,18 @@ function write_time_data_json(system_path::String,
         "TotalHoursModeled"  => TotalHoursModeled
     )
     
+    # Decide suffix
+    suffix = (GLOBAL_NUM_PERIODS[] == 1 ? "" : "_" * string(period_idx))
 
     # Write JSON
-    time_data_out_path = joinpath(tdr_output_path, "time_data.json")
+    time_data_filename = "time_data" * suffix * ".json"
+    time_data_out_path = joinpath(tdr_output_path, time_data_filename)
+
     open(time_data_out_path, "w") do io
         JSON3.write(io, time_data; indent=4)
     end
 
-    println("time_data.json written to ", time_data_out_path)
+    println("$time_data_filename written to ", time_data_out_path)
     if v
         println("   Number of commodities: ", length(commodities))
         println("   Subperiods: ", NumberOfSubperiods, 
@@ -240,7 +245,7 @@ function get_original_T_full(case_path::AbstractString)::Int
     return T_full
 end
 
-function write_subperiod_results_for_TDR(case_sub, sp_folder::String, sub_cfg, myTDRsetup::Dict)
+function write_subperiod_results(case_sub, sp_folder::String, sub_cfg, myTDRsetup::Dict)
 
     input_filename  = myTDRsetup["ClusterSubperiodFileName"]
     output_filename = myTDRsetup["ClusterSubperiodFileName"]
@@ -308,7 +313,7 @@ function write_subperiod_results_for_TDR(case_sub, sp_folder::String, sub_cfg, m
 end
 
 
-function merge_subperiod_results_for_TDR(case_path::String, myTDRsetup::Dict)
+function merge_subperiod_results_to_timeseries(case_path::String, myTDRsetup::Dict; period_idx::Int = 1)
 
     input_filename  = myTDRsetup["ClusterSubperiodFileName"]
     output_filename = myTDRsetup["ClusterSubperiodFileName"]
@@ -317,7 +322,11 @@ function merge_subperiod_results_for_TDR(case_path::String, myTDRsetup::Dict)
 
     # Correct base folder
     system_path = joinpath(case_path, "system")
-    subperiod_path = joinpath(case_path, "subperiod_results")
+    subperiod_path =
+    GLOBAL_NUM_PERIODS[] == 1 ?
+        joinpath(case_path, "subperiod_results") :
+        joinpath(case_path, "subperiod_results_$(period_idx)")
+
     isdir(subperiod_path) || error("Folder does not exist: $subperiod_path")
 
     # Identify sub_XXX folders
@@ -351,7 +360,15 @@ function merge_subperiod_results_for_TDR(case_path::String, myTDRsetup::Dict)
     end
 
     # Write final combined file
-    out_file = joinpath(system_path, output_filename)
+    name = output_filename  # user TDR setting, e.g., "subperiod_results"
+    if GLOBAL_NUM_PERIODS[] == 1
+        file = name * ".csv"
+    else
+        file = name * "_" * string(period_idx) * ".csv"
+    end
+
+    out_file = joinpath(system_path, file)
+
     CSV.write(out_file, combined_df)
 
     println("Combined stacked file written to: $out_file")

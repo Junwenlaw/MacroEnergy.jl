@@ -1,51 +1,75 @@
-function pre_clustering_tdr(case_path::String, myTDRsetup::Dict; v::Bool=false)
+function pre_clustering_tdr(case_path::String, mysetup::Dict; period_idx::Int = 1, v::Bool=false)
 
-    TimestepsPerRepPeriod = myTDRsetup["TimestepsPerRepPeriod"]
-    ScalingMethod = myTDRsetup["ScalingMethod"]
-    NumberOfSubperiods = myTDRsetup["NumberOfSubperiods"]
-    UseExtremePeriods = myTDRsetup["UseExtremePeriods"]
-    ExtPeriodSelections = myTDRsetup["ExtremePeriods"]
-    ClusterAvailability = myTDRsetup["ClusterAvailability"]
-    ClusterDemand = myTDRsetup["ClusterDemand"]
-    ClusterFuelPrices = myTDRsetup["ClusterFuelPrices"]
-    ClusterSubperiodResults = myTDRsetup["ClusterSubperiodResults"]
+    TimestepsPerRepPeriod = mysetup["TimestepsPerRepPeriod"]
+    ScalingMethod = mysetup["ScalingMethod"]
+    NumberOfSubperiods = mysetup["NumberOfSubperiods"]
+    UseExtremePeriods = mysetup["UseExtremePeriods"]
+    ExtPeriodSelections = mysetup["ExtremePeriods"]
+    ClusterAvailability = mysetup["ClusterAvailability"]
+    ClusterDemand = mysetup["ClusterDemand"]
+    ClusterFuelPrices = mysetup["ClusterFuelPrices"]
+    ClusterSubperiodResults = mysetup["ClusterSubperiodResults"]
 
-    ###################################################################
-    ################### Step 1 - Load System Inputs ###################
-    ###################################################################
+    ###########################################################
+    ################### Step 1 - Load Files ###################
+    ###########################################################
 
     println("=== Step 1: Load Files ===")
 
     system_path = joinpath(case_path, "system")
-    tdr_output_path = joinpath(system_path, myTDRsetup["TimeDomainReductionFolder"])
 
     availability = DataFrame()
     demand = DataFrame()
     fuel_prices = DataFrame()
     subperiod_results = DataFrame()
-
-    if ClusterAvailability == 1
-        avail_path = joinpath(system_path, myTDRsetup["AvailabilityFileName"])
+    
+    # File names
+    if mysetup["ClusterAvailability"] == 1
+        avail_base_name = mysetup["AvailabilityFileName"]
+        if GLOBAL_NUM_PERIODS[] == 1
+            avail_file_name = avail_base_name * ".csv"
+        else
+            avail_file_name = avail_base_name * "_" * string(period_idx) * ".csv"
+        end
+        avail_path = joinpath(system_path, avail_file_name)
         availability = DataFrame(CSV.File(avail_path))
         if v println("Loaded availability $(size(availability)) from $avail_path") end
     end
 
-    if ClusterDemand == 1
-        demand_path = joinpath(system_path, myTDRsetup["DemandFileName"])
+    if mysetup["ClusterDemand"] == 1
+        demand_base_name = mysetup["DemandFileName"]
+        if GLOBAL_NUM_PERIODS[] == 1
+            demand_file_name = demand_base_name * ".csv"
+        else
+            demand_file_name = demand_base_name * "_" * string(period_idx) * ".csv"
+        end
+        demand_path = joinpath(system_path, demand_file_name)
         demand = DataFrame(CSV.File(demand_path))
         if v println("Loaded demand $(size(demand)) from $demand_path") end
     end
 
-    if ClusterFuelPrices == 1
-        fuel_path = joinpath(system_path, myTDRsetup["FuelPricesFileName"])
+    if mysetup["ClusterFuelPrices"] == 1
+        fuel_base_name = mysetup["FuelPricesFileName"]
+        if GLOBAL_NUM_PERIODS[] == 1
+            fuel_file_name = fuel_base_name * ".csv"
+        else
+            fuel_file_name = fuel_base_name * "_" * string(period_idx) * ".csv"
+        end
+        fuel_path = joinpath(system_path, fuel_file_name)
         fuel_prices = DataFrame(CSV.File(fuel_path))
-        if v println("Loaded fuel_prices $(size(fuel_prices)) from $fuel_path") end
+        if v println("Loaded fuel prices $(size(fuel_prices)) from $fuel_path") end
     end
 
-    if ClusterSubperiodResults == 1
-        subperiod_results_path = joinpath(system_path, "Subperiod_Results.csv")
+    if mysetup["ClusterSubperiodResults"] == 1
+        subperiod_base_name = mysetup["ClusterSubperiodFileName"]
+        if GLOBAL_NUM_PERIODS[] == 1
+            subperiod_file_name = subperiod_base_name * ".csv"
+        else
+            subperiod_file_name = subperiod_base_name * "_" * string(period_idx) * ".csv"
+        end
+        subperiod_results_path = joinpath(system_path, subperiod_file_name)
         subperiod_results = DataFrame(CSV.File(subperiod_results_path))
-        if v println("Loaded subperiod_results $(size(subperiod_results)) from $subperiod_results_path") end
+        if v println("Loaded subperiod results $(size(subperiod_results)) from $subperiod_results_path") end
     end
 
     println("=== Completed ===") 
@@ -95,6 +119,11 @@ function pre_clustering_tdr(case_path::String, myTDRsetup::Dict; v::Bool=false)
         println("Load (MW) and Capacity Factor Profiles: ")
         println(describe(InputData))
         println()
+    end
+
+    # Force all columns to Float64 to avoid issues
+    for c in ColNames
+        InputData[!, c] = Float64.(InputData[!, c])
     end
 
     # Normalize or standardize directly column by column (keeping names)
@@ -221,11 +250,6 @@ function pre_clustering_tdr(case_path::String, myTDRsetup::Dict; v::Bool=false)
         end
     else
         ClusteringInputDF = ModifiedDataNormalized
-    end
-
-    if v
-        CSV.write(joinpath(tdr_output_path, "ModifiedDataNormalized.csv"), ModifiedDataNormalized)
-        CSV.write(joinpath(tdr_output_path, "ClusteringInputDF.csv"), ClusteringInputDF)
     end
 
     println("Shape of ModifiedDataNormalized: ", size(ModifiedDataNormalized))
