@@ -32,9 +32,9 @@ function generate_system!(system::System, system_data::AbstractDict{Symbol,Any})
     load_locations!(system, system.data_dirpath, system_data[:locations])
 
     # Load the time data
-
     if haskey(system_data, :TDR_time_data) && MacroEnergy.GLOBAL_TDR_FLAG[] == 1
-        @info "TDR active: loading time data from system/TDR_results"
+        @info "TDR active: loading time data from TDR results"
+
         system.time_data = load_time_data(system_data[:TDR_time_data],
                                         system.commodities,
                                         system.data_dirpath)

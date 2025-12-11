@@ -1,4 +1,5 @@
 const GLOBAL_TDR_FLAG = Ref(0) 
+const GLOBAL_NUM_PERIODS = Ref(1)
 
 """
     run_case(case_path; kwargs...) -> (systems::Vector{System}, solution::Any)
@@ -128,39 +129,35 @@ function run_case(
         load_user_additions(case_path)
 
         # Time Domain Reduction
-        tdr_settings_file = joinpath(case_path, "system", "TDR_settings.json")
+        tdr_settings_file = joinpath(case_path, "settings", "TDR_settings.json")
 
         if isfile(tdr_settings_file)
             @info "Detected TDR_settings.json"
             try
-                TDRsetup = JSON3.read(open(tdr_settings_file, "r"))
-                TDR_flag = get(TDRsetup, "TimeDomainReduction", 0)
+                case_settings_path = joinpath(case_path, "settings", "case_settings.json")
+                case_settings_setup = to_string_keys(JSON3.read(read(case_settings_path, String)))
+
+                if haskey(case_settings_setup, "PeriodLengths")
+                    num_periods = length(case_settings_setup["PeriodLengths"])
+                else
+                    num_periods = 1
+                end
+                
+                @info "Detected $num_periods planning periods"
+                myTDRsetup = to_string_keys(JSON3.read(read(tdr_settings_file, String)))
+                TDR_flag = myTDRsetup["TimeDomainReduction"]
+
                 GLOBAL_TDR_FLAG[] = TDR_flag 
+                GLOBAL_NUM_PERIODS[] = num_periods
 
                 if TDR_flag == 1
-
                     @info "Time Domain Reduction Enabled"
-
-                    # Cluster Subperiod Results: Incorporate Output-based TDR subperiod CEM stage
-                    if get(TDRsetup, "ClusterSubperiodResults", 0) == 1
-                        @info "Include subperiod cases results in TDR"
-                        
-                        # Path to combined subperiod results
-                        system_path = joinpath(case_path, "system")
-                        combined_file = joinpath(system_path, TDRsetup["ClusterSubperiodFileName"])
-
-                        # If file exists, skip subperiod runs
-                        if isfile(combined_file)
-                            @info "Subperiod results already exist, skipping subperiod runs"
-
-                        else
-                            @info "Generating subperiod results for clustering"
-                            run_subperiod_cases(case_path, optimizer, optimizer_env, optimizer_attributes; v=true)
-                            @info "Finished generating subperiod flow matrices"
-                        end
+                    # Cluster Subperiod Results: Incorporate Output-based TDR by solving individual subperiod level CEM
+                    if myTDRsetup["ClusterSubperiodResults"] == 1
+                        run_subperiod_cases(case_path, optimizer,optimizer_env, optimizer_attributes, myTDRsetup; num_periods = num_periods, v = false)
                     end
 
-                    run_time_domain_reduction(case_path; v=true)
+                    run_time_domain_reduction(case_path, myTDRsetup; num_periods = num_periods, v = false)
                 else
                     @info "Time Domain Reduction Disabled"
                 end
@@ -172,7 +169,6 @@ function run_case(
             @debug "No TDR_settings.json found — skipping time domain reduction"
             GLOBAL_TDR_FLAG[] = 0
         end
-
 
         case = load_case(case_path; lazy_load=lazy_load)
 
