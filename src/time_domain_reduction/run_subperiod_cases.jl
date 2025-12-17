@@ -147,7 +147,7 @@ function run_subperiod_cases(
 
             # Solve this subperiod
             solve_start = time()
-            (_, sol_sub) = solve_case(case_sub, opt)
+            (_, sol_sub) = solve_case(case_sub, opt, Monolithic())
             solve_time = time() - solve_start
             println("Subperiod $sp solved in $(round(solve_time; digits=2)) seconds")
 

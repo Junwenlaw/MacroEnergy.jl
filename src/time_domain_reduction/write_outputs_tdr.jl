@@ -3,7 +3,7 @@ function write_outputs_tdr(case_path::String, myTDRsetup::Dict, PeriodMap::DataF
     println("=== Write TDR Outputs ===")
 
     system_path = joinpath(case_path, "system")
-    tdr_output_path = joinpath(system_path, myTDRsetup["TimeDomainReductionFolder"])
+    tdr_output_path = joinpath(system_path, myTDRsetup["OutputFolder"])
 
     if GLOBAL_NUM_PERIODS[] == 1
         period_map_name = "Period_map.csv"

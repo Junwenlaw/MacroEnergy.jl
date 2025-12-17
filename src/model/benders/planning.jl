@@ -1,7 +1,7 @@
 
 function initialize_planning_problem!(case::Case,opt::Dict)
     
-    planning_problem = generate_planning_problem(case);
+    planning_problem, period_to_subproblem_map = generate_planning_problem(case);
 
     optimizer = create_optimizer(opt[:solver], opt_env(opt[:solver]), opt[:attributes])
 
@@ -14,7 +14,7 @@ function initialize_planning_problem!(case::Case,opt::Dict)
         scale_constraints!(planning_problem)
     end
 
-    return planning_problem
+    return planning_problem, period_to_subproblem_map
 
 end
 
@@ -97,18 +97,42 @@ function generate_planning_problem(case::Case)
 
     period_to_subproblem_map, subproblem_indices = get_period_to_subproblem_mapping(periods);
 
-    @variable(model, vTHETA[w in subproblem_indices] .>= 0)
-
     opexmult = [sum([1 / (1 + discount_rate)^(i) for i in 1:period_lengths[s]]) for s in 1:number_of_periods]
 
-    @expression(model, eVariableCostByPeriod[s in 1:number_of_periods], discount_factor[s] * opexmult[s] * sum(vTHETA[w] for w in period_to_subproblem_map[s]))
+    if case.settings.BendersSettings[:BendersCut] == "multi"
+
+        @variable(model, vTHETA[w in subproblem_indices] .>= 0)
+        @expression(model, eVariableCostByPeriod[s in 1:number_of_periods], discount_factor[s] * opexmult[s] * sum(vTHETA[w] for w in period_to_subproblem_map[s]))
+
+    elseif case.settings.BendersSettings[:BendersCut] == "single"
+
+        @variable(model, vTHETA[s in 1:number_of_periods] .>= 0)
+        @expression(model, eVariableCostByPeriod[s in 1:number_of_periods], discount_factor[s] * opexmult[s] * vTHETA[s])
+
+    elseif case.settings.BendersSettings[:BendersCut] == "group"
+
+        # Number of groups K in each period determined by clustering
+        K = case.settings.BendersSettings[:BendersNumGroups]
+    
+        # Create one vTHETA per (period s, group g)
+        @variable(model, vTHETA[s in 1:number_of_periods, g in 1:K] >= 0)
+    
+        # The variable cost expression for period s
+        @expression(model, eVariableCostByPeriod[s in 1:number_of_periods],
+            discount_factor[s] * opexmult[s] *
+            sum(vTHETA[s, g] for g in 1:K)
+        )    
+    else
+        error("BendersCut must be \"multi\" or \"single\" in benders_settings.json.")
+    end
+  
     @expression(model, eApproximateVariableCost, sum(eVariableCostByPeriod[s] for s in 1:number_of_periods))
 
     @objective(model, Min, model[:eFixedCost] + model[:eApproximateVariableCost])
 
     @info(" -- Planning problem generation complete, it took $(time() - start_time) seconds")
 
-    return model
+    return model, period_to_subproblem_map
 
 end
 

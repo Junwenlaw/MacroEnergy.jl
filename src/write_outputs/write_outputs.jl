@@ -82,7 +82,7 @@ function write_outputs(case_path::AbstractString, case::Case, bd_results::Bender
         write_flows(joinpath(results_dir, "flows.csv"), period, flow_df[subop_indices_period])
         
         # Cost results
-        costs = prepare_costs_benders(period, bd_results, subop_indices_period, settings)
+        costs = prepare_costs_benders(period, bd_results, subop_indices_period, settings, period_to_subproblem_map)
         write_costs(joinpath(results_dir, "costs.csv"), period, costs)
         write_undiscounted_costs(joinpath(results_dir, "undiscounted_costs.csv"), period, costs)
 

@@ -34,21 +34,22 @@ function run_case(
         additions_path = user_additions_module_path(case_path)
         load_user_additions(additions_path)
 
+        # Identify multi-stage or period models for TDR and Benders group clustering purposes
+        case_settings_path = joinpath(case_path, "settings", "case_settings.json")
+        case_settings_setup = to_string_keys(JSON3.read(read(case_settings_path, String)))
+
+        if haskey(case_settings_setup, "PeriodLengths")
+            num_periods = length(case_settings_setup["PeriodLengths"])
+        else
+            num_periods = 1
+        end
+
         # Time Domain Reduction
         tdr_settings_file = joinpath(case_path, "settings", "TDR_settings.json")
 
         if isfile(tdr_settings_file)
             @info "Detected TDR_settings.json"
             try
-                case_settings_path = joinpath(case_path, "settings", "case_settings.json")
-                case_settings_setup = to_string_keys(JSON3.read(read(case_settings_path, String)))
-
-                if haskey(case_settings_setup, "PeriodLengths")
-                    num_periods = length(case_settings_setup["PeriodLengths"])
-                else
-                    num_periods = 1
-                end
-                
                 @info "Detected $num_periods planning periods"
                 myTDRsetup = to_string_keys(JSON3.read(read(tdr_settings_file, String)))
                 TDR_flag = myTDRsetup["TimeDomainReduction"]
@@ -62,7 +63,6 @@ function run_case(
                     if myTDRsetup["ClusterSubperiodResults"] == 1
                         run_subperiod_cases(case_path, optimizer,optimizer_env, optimizer_attributes, myTDRsetup; num_periods = num_periods, v = false)
                     end
-
                     run_time_domain_reduction(case_path, myTDRsetup; num_periods = num_periods, v = false)
                 else
                     @info "Time Domain Reduction Disabled"
@@ -96,8 +96,43 @@ function run_case(
             end
         end
 
-        (case, solution) = solve_case(case, optimizer)
+        if isa(solution_algorithm(case), Benders)
 
+            bd_setup = get_settings(case).BendersSettings
+            fixed_group_map = nothing
+
+            # Cluster Subperiod Results: Incorporate Output-based TDR by solving individual subperiod level CEM
+            if bd_setup[:BendersCut] == "group" && bd_setup[:GroupType] == "fixed"
+                @info("Running fixed Bender group clustering based on input time-series similar to TDR")
+                @info("Utilizing TDR codes to obtain group maps")
+
+                bd_fixed_group_settings_file = joinpath(case_path, "settings", "Benders_fixed_group_settings.json")
+                myBDfixedgroupsetup = to_string_keys(JSON3.read(read(bd_fixed_group_settings_file, String)))
+                myBDfixedgroupsetup["NumberOfSubperiods"] = bd_setup[:BendersNumGroups]
+
+                if myBDfixedgroupsetup["ClusterSubperiodResults"] == 1
+                    run_subperiod_cases(case_path, planning_optimizer, optimizer_env, planning_optimizer_attributes, myBDfixedgroupsetup; num_periods = num_periods, v = false)
+                end
+
+                bd_fixed_group_settings_file = joinpath(case_path, "settings", "Benders_fixed_group_settings.json")
+                myBDfixedgroupsetup = to_string_keys(JSON3.read(read(bd_fixed_group_settings_file, String)))
+                myBDfixedgroupsetup["NumberOfSubperiods"] = bd_setup[:BendersNumGroups]
+
+                #Run TDR to obtain period map
+                run_time_domain_reduction(case_path, myBDfixedgroupsetup; num_periods = num_periods, v = false)
+
+                #Utilize period map to build Benders group map 
+                fixed_group_map = write_benders_fixed_group_map(case_path, myBDfixedgroupsetup, num_periods)
+                print_global_group_map(fixed_group_map)
+
+                @info("Pre-Benders clustering complete — fixed grouping will be used")
+            end
+
+            (case, solution) = solve_case(case, optimizer, Benders(); case_path=case_path, fixed_group_map=fixed_group_map, v = true)
+        else
+            (case, solution) = solve_case(case, optimizer)
+        end 
+        
         # Myopic outputs are written during iteration, so we don't need to write them here
         if !isa(solution_algorithm(case), Myopic)
             if length(case.systems) ≥ 1

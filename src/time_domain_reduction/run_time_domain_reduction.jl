@@ -4,7 +4,7 @@ function run_time_domain_reduction(case_path::String, myTDRsetup::Dict; num_peri
     system_path = joinpath(case_path, "system")
 
     # Check for existing files to skip running TDR
-    tdr_output_path = joinpath(system_path, myTDRsetup["TimeDomainReductionFolder"])
+    tdr_output_path = joinpath(system_path, myTDRsetup["OutputFolder"])
 
     if v
         println("TDR Settings: ")

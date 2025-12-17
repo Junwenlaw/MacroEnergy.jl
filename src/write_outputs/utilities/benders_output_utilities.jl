@@ -1,7 +1,8 @@
 function prepare_costs_benders(system::System, 
     bd_results::BendersResults, 
     subop_indices::Vector{Int64}, 
-    settings::NamedTuple
+    settings::NamedTuple,
+    period_to_subproblem_map::Dict{Int,Vector{Int}}
 )
     planning_problem = bd_results.planning_problem
     subop_sol = bd_results.subop_sol
@@ -18,8 +19,17 @@ function prepare_costs_benders(system::System,
     discounted_fixed_cost = value(x -> planning_variable_values[name(x)], planning_problem[:eDiscountedFixedCost])
 
     # evaluate the variable cost expressions using the subproblem solutions
-    variable_cost = evaluate_vtheta_in_expression(planning_problem, :eVariableCost, subop_sol, subop_indices)
-    discounted_variable_cost = evaluate_vtheta_in_expression(planning_problem, :eDiscountedVariableCost, subop_sol, subop_indices)
+    if settings.BendersSettings[:BendersCut] == "multi"
+        variable_cost = evaluate_vtheta_in_expression_multi_cuts(planning_problem, :eVariableCost, subop_sol, subop_indices)
+        discounted_variable_cost = evaluate_vtheta_in_expression_multi_cuts(planning_problem, :eDiscountedVariableCost, subop_sol, subop_indices)
+    elseif settings.BendersSettings[:BendersCut] == "single"
+        variable_cost = evaluate_vtheta_in_expression_single_cut(planning_problem, :eVariableCost, subop_sol, period_to_subproblem_map)
+        discounted_variable_cost = evaluate_vtheta_in_expression_single_cut(planning_problem, :eDiscountedVariableCost, subop_sol, period_to_subproblem_map)
+    elseif settings.BendersSettings[:BendersCut] == "group"
+        final_group_map = bd_results.final_group_map
+        variable_cost = evaluate_vtheta_in_expression_group_cuts(planning_problem, :eVariableCost, subop_sol, final_group_map)
+        discounted_variable_cost = evaluate_vtheta_in_expression_group_cuts(planning_problem, :eDiscountedVariableCost, subop_sol, final_group_map)
+    end
 
     return (
         eFixedCost = fixed_cost,

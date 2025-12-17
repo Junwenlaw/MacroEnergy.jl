@@ -33,20 +33,25 @@ function solve_case(case::Case, opt::Optimizer, ::Myopic)
 end
 
 ####### Benders decomposition algorithm #######
-function solve_case(case::Case, opt::Dict{Symbol, Dict{Symbol, Any}}, ::Benders)
+function solve_case(case::Case, opt::Dict{Symbol, Dict{Symbol, Any}}, ::Benders; case_path::Union{Nothing,String}=nothing, fixed_group_map::Union{Dict{Int,Dict{Int,Vector{Int}}},Nothing} = nothing, v::Bool=false)
 
     @info("*** Running simulation with Benders decomposition ***")
+
+    if case_path === nothing
+        error("solve_case (Benders): `case_path` must be provided when running Benders decomposition.")
+    end
+
     bd_setup = get_settings(case).BendersSettings
     periods = get_periods(case);
 
     # Decomposed system
     periods_decomp = generate_decomposed_system(periods);
 
-    planning_problem = initialize_planning_problem!(case,opt[:planning])
+    planning_problem, period_to_subproblem_map = initialize_planning_problem!(case,opt[:planning])
 
     subproblems, linking_variables_sub = initialize_subproblems!(periods_decomp,opt[:subproblems],bd_setup[:Distributed],bd_setup[:IncludeSubproblemSlacksAutomatically])
 
-    results = MacroEnergySolvers.benders(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)))
+    results = MacroEnergySolvers.benders(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; get_flow_func = MacroEnergy.get_optimal_flow, reshape_wide_func = MacroEnergy.reshape_wide, fixed_group_map = fixed_group_map, case_path = case_path, v=v)
 
     update_with_planning_solution!(case, results.planning_sol.values)
 

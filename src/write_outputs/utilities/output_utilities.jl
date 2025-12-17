@@ -456,7 +456,7 @@ Evaluate the expression `expr` for a specific period using operational subproble
 # Returns
 The evaluated expression for the specified period 
 """
-function evaluate_vtheta_in_expression(m::Model, expr::Symbol, subop_sol::Dict, subop_indices::Vector{Int64})
+function evaluate_vtheta_in_expression_multi_cuts(m::Model, expr::Symbol, subop_sol::Dict, subop_indices::Vector{Int64})
     @assert haskey(m, expr)
     
     # Create mapping from theta variables to their operational costs for this period
@@ -469,3 +469,33 @@ function evaluate_vtheta_in_expression(m::Model, expr::Symbol, subop_sol::Dict, 
     return value(x -> theta_to_cost[x], m[expr])
     
 end
+
+function evaluate_vtheta_in_expression_single_cut(m::Model,expr::Symbol,subop_sol::Dict,period_to_subproblem_map::Dict{Int,Vector{Int}})
+    @assert haskey(m, expr)
+    
+    # Create mapping from theta variables to their operational costs for this period
+    theta_to_cost = Dict(
+        m[:vTHETA][s] =>
+            sum(subop_sol[w].op_cost for w in period_to_subproblem_map[s])
+        for s in keys(period_to_subproblem_map)
+    )
+    
+    # Evaluate the expression `expr` using the mapping
+    return value(x -> theta_to_cost[x], m[expr])
+    
+end
+
+function evaluate_vtheta_in_expression_group_cuts(m::Model, expr::Symbol, subop_sol::Dict, group_map::Dict{Int, Dict{Int, Vector{Int}}})
+    @assert haskey(m, expr)
+
+    # Map each θ[s,g] to the true aggregated operational cost of its group
+    theta_to_cost = Dict(
+        m[:vTHETA][s, g] =>
+            sum(subop_sol[w].op_cost for w in group_map[s][g])
+        for s in keys(group_map)
+        for g in keys(group_map[s])
+    )
+
+    return value(x -> theta_to_cost[x], m[expr])
+end
+
