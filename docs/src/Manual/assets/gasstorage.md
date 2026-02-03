@@ -513,7 +513,7 @@ Below is an example of an input file for a gas storage asset that sets a single 
                     "commodity": "Hydrogen",
                     "can_expand": true,
                     "can_retire": false,
-                    "long_duration": true,
+                    "long_duration": false,
                     "investment_cost": 873.01,
                     "fixed_om_cost": 28.76,
                     "loss_fraction": 0.0,

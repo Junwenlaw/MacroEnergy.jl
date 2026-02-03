@@ -29,6 +29,7 @@ function run_case(
     # Wrapping the work in a try-catch to all for cleanup after errors
     try 
         @info("Running case at $(case_path)")
+        start_case = time()
 
         create_user_additions_module(case_path)
         additions_path = user_additions_module_path(case_path)
@@ -46,6 +47,8 @@ function run_case(
 
         # Time Domain Reduction
         tdr_settings_file = joinpath(case_path, "settings", "TDR_settings.json")
+        cpu_subperiod_cases = "NA"
+        cpu_time_domain_reduction = "NA"
 
         if isfile(tdr_settings_file)
             @info "Detected TDR_settings.json"
@@ -61,9 +64,13 @@ function run_case(
                     @info "Time Domain Reduction Enabled"
                     # Cluster Subperiod Results: Incorporate Output-based TDR by solving individual subperiod level CEM
                     if myTDRsetup["ClusterSubperiodResults"] == 1
+                        start_subperiod_cases = time()
                         run_subperiod_cases(case_path, optimizer,optimizer_env, optimizer_attributes, myTDRsetup; num_periods = num_periods, v = false)
+                        cpu_subperiod_cases = time() - start_subperiod_cases
                     end
+                    start_time_domain_reduction = time()
                     run_time_domain_reduction(case_path, myTDRsetup; num_periods = num_periods, v = false)
+                    cpu_time_domain_reduction = time() - start_time_domain_reduction
                 else
                     @info "Time Domain Reduction Disabled"
                 end
@@ -96,6 +103,9 @@ function run_case(
             end
         end
 
+        cpu_benders_group_subproblem_cases = "NA"
+        cpu_benders_group_clustering = "NA"
+
         if isa(solution_algorithm(case), Benders)
 
             bd_setup = get_settings(case).BendersSettings
@@ -106,20 +116,24 @@ function run_case(
                 @info("Running fixed Bender group clustering based on input time-series similar to TDR")
                 @info("Utilizing TDR codes to obtain group maps")
 
-                bd_fixed_group_settings_file = joinpath(case_path, "settings", "Benders_fixed_group_settings.json")
+                bd_fixed_group_settings_file = joinpath(case_path, "settings", "benders_fixed_group_settings.json")
                 myBDfixedgroupsetup = to_string_keys(JSON3.read(read(bd_fixed_group_settings_file, String)))
                 myBDfixedgroupsetup["NumberOfSubperiods"] = bd_setup[:BendersNumGroups]
 
                 if myBDfixedgroupsetup["ClusterSubperiodResults"] == 1
+                    start_benders_group_subproblem_cases = time()
                     run_subperiod_cases(case_path, planning_optimizer, optimizer_env, planning_optimizer_attributes, myBDfixedgroupsetup; num_periods = num_periods, v = false)
+                    cpu_benders_group_subproblem_cases = time() - start_benders_group_subproblem_cases
                 end
 
-                bd_fixed_group_settings_file = joinpath(case_path, "settings", "Benders_fixed_group_settings.json")
+                bd_fixed_group_settings_file = joinpath(case_path, "settings", "benders_fixed_group_settings.json")
                 myBDfixedgroupsetup = to_string_keys(JSON3.read(read(bd_fixed_group_settings_file, String)))
                 myBDfixedgroupsetup["NumberOfSubperiods"] = bd_setup[:BendersNumGroups]
 
                 #Run TDR to obtain period map
+                start_benders_group_clustering = time()
                 run_time_domain_reduction(case_path, myBDfixedgroupsetup; num_periods = num_periods, v = false)
+                cpu_benders_group_clustering = time() - start_benders_group_clustering
 
                 #Utilize period map to build Benders group map 
                 fixed_group_map = write_benders_fixed_group_map(case_path, myBDfixedgroupsetup, num_periods)
@@ -128,11 +142,17 @@ function run_case(
                 @info("Pre-Benders clustering complete — fixed grouping will be used")
             end
 
-            (case, solution) = solve_case(case, optimizer, Benders(); case_path=case_path, fixed_group_map=fixed_group_map, v = true)
+            start_solve_total = time()
+            (case, solution, cpu_optimization) = solve_case(case, optimizer, Benders(); case_path=case_path, fixed_group_map=fixed_group_map, v = false)
+            cpu_solve_total = time() - start_solve_total
         else
-            (case, solution) = solve_case(case, optimizer)
+            start_solve_total = time()
+            (case, solution, cpu_optimization) = solve_case(case, optimizer)
+            cpu_solve_total = time() - start_solve_total
         end 
-        
+
+        cpu_case = time() - start_case
+
         # Myopic outputs are written during iteration, so we don't need to write them here
         if !isa(solution_algorithm(case), Myopic)
             if length(case.systems) ≥ 1
@@ -147,6 +167,22 @@ function run_case(
                 rmprocs.(workers())
             end
         end
+
+        # Write CPU runtime summary
+        runtime_df = DataFrame(
+            TDR_Subperiod_Cases_sec            = [cpu_subperiod_cases],
+            TDR_Clustering_sec                 = [cpu_time_domain_reduction],
+            Benders_Subperiod_Cases_sec        = [cpu_benders_group_subproblem_cases],
+            Benders_Group_Clustering_sec       = [cpu_benders_group_clustering],
+            Optimization_CPU_sec               = [cpu_optimization],
+            Solve_Total_CPU_sec                = [cpu_solve_total],
+            Case_Total_CPU_sec                 = [cpu_case],
+        )
+
+        runtime_csv_path = joinpath(case_path, "Case_Runtime_Summary.csv")
+        CSV.write(runtime_csv_path, runtime_df)
+        @info("Case runtime summary written to $runtime_csv_path")
+
 
         return case.systems, solution
     catch e

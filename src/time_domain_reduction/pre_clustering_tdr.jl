@@ -22,7 +22,7 @@ function pre_clustering_tdr(case_path::String, mysetup::Dict; period_idx::Int = 
     demand = DataFrame()
     fuel_prices = DataFrame()
     subperiod_results = DataFrame()
-    
+
     # File names
     if mysetup["ClusterAvailability"] == 1
         avail_base_name = mysetup["AvailabilityFileName"]
@@ -33,6 +33,8 @@ function pre_clustering_tdr(case_path::String, mysetup::Dict; period_idx::Int = 
         end
         avail_path = joinpath(system_path, avail_file_name)
         availability = DataFrame(CSV.File(avail_path))
+        Nhours_full = (nrow(availability) ÷ TimestepsPerRepPeriod) * TimestepsPerRepPeriod
+        availability = availability[1:Nhours_full, :]
         if v println("Loaded availability $(size(availability)) from $avail_path") end
     end
 
@@ -45,6 +47,8 @@ function pre_clustering_tdr(case_path::String, mysetup::Dict; period_idx::Int = 
         end
         demand_path = joinpath(system_path, demand_file_name)
         demand = DataFrame(CSV.File(demand_path))
+        Nhours_full = (nrow(demand) ÷ TimestepsPerRepPeriod) * TimestepsPerRepPeriod
+        demand = demand[1:Nhours_full, :]
         if v println("Loaded demand $(size(demand)) from $demand_path") end
     end
 
@@ -57,6 +61,8 @@ function pre_clustering_tdr(case_path::String, mysetup::Dict; period_idx::Int = 
         end
         fuel_path = joinpath(system_path, fuel_file_name)
         fuel_prices = DataFrame(CSV.File(fuel_path))
+        Nhours_full = (nrow(fuel_prices) ÷ TimestepsPerRepPeriod) * TimestepsPerRepPeriod
+        fuel_prices = fuel_prices[1:Nhours_full, :]
         if v println("Loaded fuel prices $(size(fuel_prices)) from $fuel_path") end
     end
 
@@ -69,8 +75,13 @@ function pre_clustering_tdr(case_path::String, mysetup::Dict; period_idx::Int = 
         end
         subperiod_results_path = joinpath(system_path, subperiod_file_name)
         subperiod_results = DataFrame(CSV.File(subperiod_results_path))
+        Nhours_full = (nrow(subperiod_results) ÷ TimestepsPerRepPeriod) * TimestepsPerRepPeriod
+        subperiod_results = subperiod_results[1:Nhours_full, :]
+
         if v println("Loaded subperiod results $(size(subperiod_results)) from $subperiod_results_path") end
     end
+
+    
 
     println("=== Completed ===") 
     println()

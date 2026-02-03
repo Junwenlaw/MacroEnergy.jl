@@ -35,13 +35,13 @@ function run_time_domain_reduction(case_path::String, myTDRsetup::Dict; num_peri
         (ClusteringInputDF, ModifiedDataNormalized, NClusters, ExtremeWksList) = pre_clustering_tdr(case_path, myTDRsetup; period_idx = s, v=v)
 
         # Clustering
-        (A, M, W) = clustering_tdr(tdr_output_path, myTDRsetup, ClusteringInputDF, NClusters; period_idx = s, v=v)
+        (A, M, W, autoencoder_training_time, clustering_time) = clustering_tdr(tdr_output_path, myTDRsetup, ClusteringInputDF, NClusters; period_idx = s, v=v)
 
         # Post-clustering processing
         (A, W, M, PeriodMap) = post_clustering_tdr(myTDRsetup, ClusteringInputDF, NClusters, A, W, M, ExtremeWksList, ModifiedDataNormalized; v=v)
 
         # Write outputs
-        write_outputs_tdr(case_path, myTDRsetup, PeriodMap, M; period_idx = s, v=v)
+        write_outputs_tdr(case_path, myTDRsetup, PeriodMap, M, autoencoder_training_time, clustering_time; period_idx = s, v=v)
     end
 
     @info "TDR Completed"

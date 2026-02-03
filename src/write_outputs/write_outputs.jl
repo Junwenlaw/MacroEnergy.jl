@@ -86,6 +86,8 @@ function write_outputs(case_path::AbstractString, case::Case, bd_results::Bender
         write_costs(joinpath(results_dir, "costs.csv"), period, costs)
         write_undiscounted_costs(joinpath(results_dir, "undiscounted_costs.csv"), period, costs)
 
+        write_settings(case, joinpath(case_path, "settings.json"))
+
         # Write dual values (if enabled)
         if period.settings.DualExportsEnabled
             # Move slack variables from subproblems to planning problem
@@ -107,7 +109,6 @@ function write_outputs(case_path::AbstractString, case::Case, bd_results::Bender
             write_duals_benders(results_dir, period, discount_scaling)
         end
     end
-    write_settings(case, joinpath(case_path, "settings.json"))
     return nothing
 end
 
@@ -130,13 +131,13 @@ function write_outputs(results_dir::AbstractString,
     # Flow results
     write_flow(joinpath(results_dir, "flows.csv"), system)
 
+    write_time_weights(results_dir, system)
+
     # Write dual values (if enabled)
     if system.settings.DualExportsEnabled
         ensure_duals_available!(model)        
         write_duals(results_dir, system, scaling)
     end
-
-    write_time_weights(results_dir, system)
 
     return nothing
 end

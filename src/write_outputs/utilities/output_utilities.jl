@@ -392,10 +392,16 @@ function search_assets(
         end
         
         # Add the parametric types
+        # Try both unquoted (e.g., "ThermalPower{") and quoted (e.g., "\"ThermalPower{") versions
         parametric_matches = Symbol.(available_types[startswith.(available_types, Ref(a * "{"))])
         union!(final_asset_types, parametric_matches)
         found_any = found_any || !isempty(parametric_matches)
-        
+
+        # Also try with leading quote (handles types returned with quotes from get_type)
+        parametric_matches_quoted = Symbol.(available_types[startswith.(available_types, Ref("\"" * a * "{"))])
+        union!(final_asset_types, parametric_matches_quoted)
+        found_any = found_any || !isempty(parametric_matches_quoted)
+
         # Add the asset types itself, if they're in the dataframe
         if a in available_types
             push!(final_asset_types, Symbol(a))
@@ -491,7 +497,10 @@ function evaluate_vtheta_in_expression_group_cuts(m::Model, expr::Symbol, subop_
     # Map each θ[s,g] to the true aggregated operational cost of its group
     theta_to_cost = Dict(
         m[:vTHETA][s, g] =>
-            sum(subop_sol[w].op_cost for w in group_map[s][g])
+            sum(
+                (subop_sol[w].op_cost for w in group_map[s][g] if haskey(subop_sol, w));
+                init = 0.0,
+            )
         for s in keys(group_map)
         for g in keys(group_map[s])
     )

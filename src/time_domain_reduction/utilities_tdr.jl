@@ -245,47 +245,35 @@ function get_original_T_full(case_path::AbstractString)::Int
     return T_full
 end
 
-function write_subperiod_results(case_sub, sp_folder::String, sub_cfg, myTDRsetup::Dict)
-
-    input_filename  = myTDRsetup["ClusterSubperiodFileName"]
-    output_filename = myTDRsetup["ClusterSubperiodFileName"]
-    Zero_Threshold = myTDRsetup["Zero_Threshold"]
-
+function write_subperiod_results(
+    case_sub,
+    sp_folder::String,
+    sub_cfg,
+    out_name::String,
+    Zero_Threshold::Float64
+)
     # Folder for TDR flow results
     comm_folder = joinpath(sp_folder, "results_for_TDR")
     mkpath(comm_folder)
 
     df_merged = DataFrame()
-    any_included = false
 
-    # Loop over commodities
     for (commodity, cfg) in sub_cfg
-        if cfg["Include"] == 0
-            continue
-        end
-        any_included = true
+        cfg["Include"] == 1 || continue
 
-        asset_cfg = cfg["Assets"]
+        for (asset, toggle) in cfg["Assets"]
+            toggle == 1 || continue
 
-        # Loop over assets
-        for (asset, toggle) in asset_cfg
-            if toggle == 0
-                continue
-            end
-
-            any_included = true
-
-            # Extract flow results
             df_asset = get_optimal_flow(
                 case_sub.systems[1];
                 commodity = string(commodity),
                 asset_type = string(asset)
             )
+            isempty(df_asset) && continue
 
-            # Convert to wide layout
             df_wide = reshape_wide(df_asset, :time, :component_id, :value)
 
-            # Write individual file
+            # Write individual file (optional, but you said keep folder outputs)
             out_path = joinpath(comm_folder, "$(commodity)_$(asset).csv")
             CSV.write(out_path, df_wide)
 
@@ -300,17 +288,24 @@ function write_subperiod_results(case_sub, sp_folder::String, sub_cfg, myTDRsetu
         end
     end
 
+    if isempty(df_merged)
+        # still write an empty file so merge step can skip/handle consistently
+        df_merged = DataFrame(Time_Index = Int[])
+        CSV.write(joinpath(sp_folder, out_name), df_merged)
+        return nothing
+    end
+
     rename!(df_merged, :time => :Time_Index)
 
     for col in names(df_merged)
+        col == :Time_Index && continue
         df_merged[abs.(df_merged[!, col]) .< Zero_Threshold, col] .= 0.0
     end
 
-    # Write the merged output
-    merged_path = joinpath(sp_folder, output_filename)
-    CSV.write(merged_path, df_merged)
-
+    CSV.write(joinpath(sp_folder, out_name), df_merged)
+    return nothing
 end
+
 
 
 function merge_subperiod_results_to_timeseries(case_path::String, myTDRsetup::Dict; period_idx::Int = 1)
@@ -557,4 +552,24 @@ function disable_policy_constraints!(system)
     end
 
     return
+end
+
+
+function write_subperiods_solve_time(case_path::String, subperiods_solve_time; period_idx::Int = 1)
+    #Write subperiod solve time for each period (stage)
+    runtime_df = DataFrame(
+        Subperiod_Runtime = [subperiods_solve_time],
+    )
+    system_path = joinpath(case_path, "system")
+
+    name = "subperiod_runtime"
+    if GLOBAL_NUM_PERIODS[] == 1
+        file = name * ".csv"
+    else
+        file = name * "_" * string(period_idx) * ".csv"
+    end
+
+    out_file = joinpath(system_path, file)
+
+    CSV.write(out_file, runtime_df)
 end

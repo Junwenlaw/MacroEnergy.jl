@@ -36,5 +36,5 @@ function clustering_tdr(tdr_output_path, myTDRsetup, ClusteringInputDF, NCluster
     println("=== Completed ===") 
     println()
 
-    return (A, M, W)
+    return (A, M, W, autoencoder_training_time, clustering_time)
 end

@@ -87,7 +87,9 @@ function run_myopic_iteration!(case::Case, opt::Optimizer)
 
         scale_constraints!(system, model)
 
+        start_optimization = time()
         optimize!(model)
+        cpu_optimization = time() - start_optimization
 
         if period_idx < num_periods
             @info(" -- Final capacity in period $(period_idx) is being carried over to period $(period_idx+1)")
@@ -110,7 +112,7 @@ function run_myopic_iteration!(case::Case, opt::Optimizer)
     @info("Writing settings file")
     write_settings(case, joinpath(output_path, "settings.json"))
 
-    return return_models ? MyopicResults(models) : MyopicResults(nothing)
+    return return_models ? MyopicResults(models) : MyopicResults(nothing), cpu_optimization
 end
 
 """

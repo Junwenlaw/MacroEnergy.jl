@@ -1,4 +1,4 @@
-function write_outputs_tdr(case_path::String, myTDRsetup::Dict, PeriodMap::DataFrame, M::Vector{Int}; period_idx::Int = 1, v::Bool=false)
+function write_outputs_tdr(case_path::String, myTDRsetup::Dict, PeriodMap::DataFrame, M::Vector{Int}, autoencoder_training_time, clustering_time; period_idx::Int = 1, v::Bool=false)
     
     println("=== Write TDR Outputs ===")
 
@@ -49,6 +49,14 @@ function write_outputs_tdr(case_path::String, myTDRsetup::Dict, PeriodMap::DataF
         period_idx=period_idx,
         v=v
     )
+
+    runtime_df = DataFrame(
+        ClusterMethod = [myTDRsetup["ClusterMethod"]],
+        Autoencoder_Training_Time = [autoencoder_training_time],
+        Clustering_Time = [clustering_time],
+    )
+
+    CSV.write(joinpath(tdr_output_path, "clustering_runtime.csv"), runtime_df)
 
     println("=== Completed ===")
     println()

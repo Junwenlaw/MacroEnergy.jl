@@ -128,6 +128,69 @@ function generate_planning_problem(case::Case)
   
     @expression(model, eApproximateVariableCost, sum(eVariableCostByPeriod[s] for s in 1:number_of_periods))
 
+    # Add MP valid inequalities for average commodity supply–demand balance
+    vi_cfg = get(case.settings.BendersSettings, :ValidInequalities, nothing)
+
+    if vi_cfg !== nothing && get(vi_cfg, :Enabled, false)
+
+        commodities = Symbol[]
+
+        for (c, cfg) in pairs(vi_cfg.Commodities)
+            cfg.Enabled && push!(commodities, c)
+        end
+
+        if !isempty(commodities)
+
+            @info "Adding Benders valid inequalities for commodities: $(commodities)"
+        
+            @variable(model, vUAVG[s in 1:number_of_periods, r in commodities] >= 0)
+        
+            disable_after = get(vi_cfg, :DisableAfterIter, 0)  # 0 => never delete
+            model.ext[:VI] = Dict{Symbol,Any}(
+                :disable_after => disable_after,
+                :cons => JuMP.ConstraintRef[],
+            )
+        
+            # Capacity upper-bound: u[s,r] ≤ availability-weighted eligible capacity
+            print_vi = get(vi_cfg, :PrintConstraints, false)
+
+            for (s, system) in enumerate(periods)
+                for (r, cfg) in pairs(vi_cfg.Commodities)
+                    cfg.Enabled || continue
+            
+                    # ---- Capacity upper bound ----
+                    capE = effective_capacity_expr_for_commodity(system, r, cfg.Assets; include_availability=true)
+                    con_ub = @constraint(model, vUAVG[s, r] <= capE)
+                    push!(model.ext[:VI][:cons], con_ub)
+            
+                    # ---- Demand lower bound ----
+                    frac = get(cfg, :DemandFraction, 1.0)
+                    avgD = average_demand_for_commodity(system, r)
+            
+                    con_lb = nothing
+                    if avgD > 0
+                        con_lb = @constraint(model, vUAVG[s, r] >= frac * avgD)
+                        push!(model.ext[:VI][:cons], con_lb)
+                    end
+            
+                    if print_vi
+                        @info "VI capacity UB (s=$s, r=$r): $(JuMP.constraint_object(con_ub))"
+                        if con_lb !== nothing
+                            @info "VI demand LB   (s=$s, r=$r): $(JuMP.constraint_object(con_lb))"
+                        else
+                            @info "VI demand LB   (s=$s, r=$r): skipped (avgD <= 0)"
+                        end
+                    end
+                end
+            end
+            
+        
+            @info "Benders valid inequality constraints added (DisableAfterIter = $disable_after)"
+        end
+        
+        
+    end
+
     @objective(model, Min, model[:eFixedCost] + model[:eApproximateVariableCost])
 
     @info(" -- Planning problem generation complete, it took $(time() - start_time) seconds")

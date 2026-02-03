@@ -6,8 +6,8 @@ function solve_case(case::Case, opt::Optimizer, ::Monolithic)
 
     @info("*** Running simulation with monolithic solver ***")
     
+    
     model = generate_model(case)
-
     set_optimizer(model, opt)
 
     # For monolithic solution there is only one model
@@ -17,9 +17,11 @@ function solve_case(case::Case, opt::Optimizer, ::Monolithic)
         scale_constraints!(model)
     end
 
+    start_optimization = time()
     optimize!(model)
+    cpu_optimization = time() - start_optimization
 
-    return (case, model)
+    return (case, model, cpu_optimization)
 end
 
 ####### myopic expansion #######
@@ -27,9 +29,9 @@ function solve_case(case::Case, opt::Optimizer, ::Myopic)
 
     @info("*** Running simulation with myopic iteration ***")
     
-    myopic_results = run_myopic_iteration!(case,opt)
+    myopic_results, cpu_optimization = run_myopic_iteration!(case,opt)
 
-    return (case, myopic_results)
+    return (case, myopic_results, cpu_optimization)
 end
 
 ####### Benders decomposition algorithm #######
@@ -43,6 +45,8 @@ function solve_case(case::Case, opt::Dict{Symbol, Dict{Symbol, Any}}, ::Benders;
 
     bd_setup = get_settings(case).BendersSettings
     periods = get_periods(case);
+    partial_subproblem_solve = get(bd_setup, :PartialSubproblemSolve, false)
+    cut_trimming = get(bd_setup, :CutTrimming, false)
 
     # Decomposed system
     periods_decomp = generate_decomposed_system(periods);
@@ -51,11 +55,45 @@ function solve_case(case::Case, opt::Dict{Symbol, Dict{Symbol, Any}}, ::Benders;
 
     subproblems, linking_variables_sub = initialize_subproblems!(periods_decomp,opt[:subproblems],bd_setup[:Distributed],bd_setup[:IncludeSubproblemSlacksAutomatically])
 
-    results = MacroEnergySolvers.benders(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; get_flow_func = MacroEnergy.get_optimal_flow, reshape_wide_func = MacroEnergy.reshape_wide, fixed_group_map = fixed_group_map, case_path = case_path, v=v)
+    start_optimization = time()
+    #results = MacroEnergySolvers.benders(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; get_flow_func = MacroEnergy.get_optimal_flow, reshape_wide_func = MacroEnergy.reshape_wide, fixed_group_map = fixed_group_map, case_path = case_path, v=v)
+    if bd_setup[:BendersCut] == "multi" && !partial_subproblem_solve && !cut_trimming
+        @info("Running Multi-cut Benders")
+        results = MacroEnergySolvers.benders_multi(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; case_path = case_path, v=v)
+
+    elseif bd_setup[:BendersCut] == "multi" && !partial_subproblem_solve && cut_trimming
+        @info("Running Multi-cut Benders with Cut Trim")
+        results = MacroEnergySolvers.benders_multi_trimming(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; case_path = case_path, v=v)
+
+    elseif bd_setup[:BendersCut] == "single"
+        @info("Running Single-cut Benders")
+        results = MacroEnergySolvers.benders_single(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; case_path = case_path, v=v)
+
+    elseif bd_setup[:BendersCut] == "group" && bd_setup[:GroupType] == "fixed"
+        @info("Running Fixed Group-cut Benders")
+        results = MacroEnergySolvers.benders_fixed_group(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; fixed_group_map = fixed_group_map, case_path = case_path, v=v)
+    
+    elseif bd_setup[:BendersCut] == "group" && bd_setup[:GroupType] == "adaptive" && !partial_subproblem_solve
+        @info("Running Adaptive Group-cut Benders")
+        results = MacroEnergySolvers.benders_adaptive_group(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; get_flow_func = MacroEnergy.get_optimal_flow, reshape_wide_func = MacroEnergy.reshape_wide, case_path = case_path, v=v)
+    
+    # Partial SP solving algorithms
+    elseif bd_setup[:BendersCut] == "multi" && partial_subproblem_solve
+        @info("Running Multi-cut Benders with Partial Subproblem Solves from intermediate clustering")
+        results = MacroEnergySolvers.benders_multi_partial_SP(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; get_flow_func = MacroEnergy.get_optimal_flow, reshape_wide_func = MacroEnergy.reshape_wide, case_path = case_path, v=v)
+
+    elseif bd_setup[:BendersCut] == "group" && bd_setup[:GroupType] == "adaptive" && partial_subproblem_solve
+        @info("Running Adaptive Group-cut Benders with Partial Subproblem Solves")
+        results = MacroEnergySolvers.benders_adaptive_group_partial_SP(planning_problem, subproblems, linking_variables_sub, Dict(pairs(bd_setup)), period_to_subproblem_map; get_flow_func = MacroEnergy.get_optimal_flow, reshape_wide_func = MacroEnergy.reshape_wide, case_path = case_path, v=v)
+    
+    else
+        error("Benders method unspecified - Use multi, single, or group (fixed or adaptive) cuts")
+    end
+    cpu_optimization = time() - start_optimization
 
     update_with_planning_solution!(case, results.planning_sol.values)
 
-    return (case, BendersResults(results, subproblems))
+    return (case, BendersResults(results, subproblems), cpu_optimization)
 end
 
 """
