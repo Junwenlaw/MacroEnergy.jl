@@ -40,9 +40,10 @@ function run_myopic_iteration!(case::Case, opt::Optimizer)
         model[:eInvestmentFixedCost] = AffExpr(0.0)
         model[:eOMFixedCost] = AffExpr(0.0)
         model[:eVariableCost] = AffExpr(0.0)
+        model[:eCO2PriceCost] = AffExpr(0.0)
 
         @info(" -- Adding linking variables")
-        add_linking_variables!(system, model) 
+        add_linking_variables!(system, model)
 
         @info(" -- Defining available capacity")
         define_available_capacity!(system, model)
@@ -53,6 +54,9 @@ function run_myopic_iteration!(case::Case, opt::Optimizer)
         @info(" -- Generating operational model")
         operation_model!(system, model)
 
+        # Merge CO2 price cost into variable cost for the objective, then track separately
+        add_to_expression!(model[:eVariableCost], model[:eCO2PriceCost])
+
         # Express myopic cost in present value from perspective of start of modeling horizon, in consistency with Monolithic version
 
         model[:eFixedCost] = model[:eInvestmentFixedCost] + model[:eOMFixedCost]
@@ -62,21 +66,25 @@ function run_myopic_iteration!(case::Case, opt::Optimizer)
 	    unregister(model,:eFixedCost)
         unregister(model,:eInvestmentFixedCost)
         unregister(model,:eOMFixedCost)
-        
+
         variable_cost[period_idx] = model[:eVariableCost];
         unregister(model,:eVariableCost)
-    
+
         @expression(model, eFixedCostByPeriod[period_idx], discount_factor[period_idx] * fixed_cost[period_idx])
 
         @expression(model, eInvestmentFixedCostByPeriod[period_idx], discount_factor[period_idx] * investment_cost[period_idx])
 
         @expression(model, eOMFixedCostByPeriod[period_idx], discount_factor[period_idx] * om_fixed_cost[period_idx])
-    
+
         @expression(model, eFixedCost, eFixedCostByPeriod[period_idx])
-        
+
         @expression(model, eVariableCostByPeriod[period_idx], discount_factor[period_idx] * opexmult[period_idx] * variable_cost[period_idx])
-    
+
         @expression(model, eVariableCost, eVariableCostByPeriod[period_idx])
+
+        co2_price_cost_period = model[:eCO2PriceCost]
+        unregister(model, :eCO2PriceCost)
+        @expression(model, eCO2PriceCostByPeriod[period_idx], discount_factor[period_idx] * opexmult[period_idx] * co2_price_cost_period)
 
         @objective(model, Min, model[:eFixedCost] + model[:eVariableCost])
 
@@ -87,7 +95,9 @@ function run_myopic_iteration!(case::Case, opt::Optimizer)
 
         scale_constraints!(system, model)
 
+        start_optimization = time()
         optimize!(model)
+        cpu_optimization = time() - start_optimization
 
         if period_idx < num_periods
             @info(" -- Final capacity in period $(period_idx) is being carried over to period $(period_idx+1)")
@@ -110,7 +120,7 @@ function run_myopic_iteration!(case::Case, opt::Optimizer)
     @info("Writing settings file")
     write_settings(case, joinpath(output_path, "settings.json"))
 
-    return return_models ? MyopicResults(models) : MyopicResults(nothing)
+    return return_models ? MyopicResults(models) : MyopicResults(nothing), cpu_optimization
 end
 
 """

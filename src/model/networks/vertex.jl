@@ -63,6 +63,16 @@ balance_ids = balance_ids(elec_node)
 balance_ids(v::AbstractVertex) = collect(keys(v.balance_data))
 
 """
+    balance_constraint_ids(v::AbstractVertex)
+
+Return the balance IDs that `BalanceConstraint` should enforce to zero.
+By default this is all balance IDs. Overrides can exclude tracking-only
+balances (like `:vre_demand`) that are accumulated for use by policy
+constraints but should not themselves be constrained to zero.
+"""
+balance_constraint_ids(v::AbstractVertex) = balance_ids(v)
+
+"""
     balance_data(v::AbstractVertex, i::Symbol)
 
 Get the input data for a specific balance equation in a vertex.

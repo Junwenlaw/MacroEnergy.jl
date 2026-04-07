@@ -1,7 +1,7 @@
 
 function initialize_planning_problem!(case::Case,opt::Dict)
     
-    planning_problem = generate_planning_problem(case);
+    planning_problem, period_to_subproblem_map = generate_planning_problem(case);
 
     optimizer = create_optimizer(opt[:solver], opt_env(opt[:solver]), opt[:attributes])
 
@@ -14,7 +14,7 @@ function initialize_planning_problem!(case::Case,opt::Dict)
         scale_constraints!(planning_problem)
     end
 
-    return planning_problem
+    return planning_problem, period_to_subproblem_map
 
 end
 
@@ -97,18 +97,110 @@ function generate_planning_problem(case::Case)
 
     period_to_subproblem_map, subproblem_indices = get_period_to_subproblem_mapping(periods);
 
-    @variable(model, vTHETA[w in subproblem_indices] .>= 0)
-
     opexmult = [sum([1 / (1 + discount_rate)^(i) for i in 1:period_lengths[s]]) for s in 1:number_of_periods]
 
-    @expression(model, eVariableCostByPeriod[s in 1:number_of_periods], discount_factor[s] * opexmult[s] * sum(vTHETA[w] for w in period_to_subproblem_map[s]))
+    if case.settings.BendersSettings[:BendersCut] == "multi"
+
+        @variable(model, vTHETA[w in subproblem_indices] .>= 0)
+        @expression(model, eVariableCostByPeriod[s in 1:number_of_periods], discount_factor[s] * opexmult[s] * sum(vTHETA[w] for w in period_to_subproblem_map[s]))
+
+    elseif case.settings.BendersSettings[:BendersCut] == "single"
+
+        @variable(model, vTHETA[s in 1:number_of_periods] .>= 0)
+        @expression(model, eVariableCostByPeriod[s in 1:number_of_periods], discount_factor[s] * opexmult[s] * vTHETA[s])
+
+    elseif case.settings.BendersSettings[:BendersCut] == "group"
+
+        # Number of groups K in each period determined by clustering
+        K = case.settings.BendersSettings[:BendersNumGroups]
+    
+        # Create one vTHETA per (period s, group g)
+        @variable(model, vTHETA[s in 1:number_of_periods, g in 1:K] >= 0)
+    
+        # The variable cost expression for period s
+        @expression(model, eVariableCostByPeriod[s in 1:number_of_periods],
+            discount_factor[s] * opexmult[s] *
+            sum(vTHETA[s, g] for g in 1:K)
+        )    
+
+    elseif case.settings.BendersSettings[:BendersCut] == "group_disaggregated"
+        @variable(model, vTHETA[w in subproblem_indices] .>= 0)
+        @expression(model, eVariableCostByPeriod[s in 1:number_of_periods], discount_factor[s] * opexmult[s] * sum(vTHETA[w] for w in period_to_subproblem_map[s]))
+
+    else
+        error("BendersCut must be \"multi\" or \"single\" in benders_settings.json.")
+    end
+  
     @expression(model, eApproximateVariableCost, sum(eVariableCostByPeriod[s] for s in 1:number_of_periods))
+
+    # Add MP valid inequalities for average commodity supply–demand balance
+    vi_cfg = get(case.settings.BendersSettings, :ValidInequalities, nothing)
+
+    if vi_cfg !== nothing && get(vi_cfg, :Enabled, false)
+
+        commodities = Symbol[]
+
+        for (c, cfg) in pairs(vi_cfg.Commodities)
+            cfg.Enabled && push!(commodities, c)
+        end
+
+        if !isempty(commodities)
+
+            @info "Adding Benders valid inequalities for commodities: $(commodities)"
+        
+            @variable(model, vUAVG[s in 1:number_of_periods, r in commodities] >= 0)
+        
+            disable_after = get(vi_cfg, :DisableAfterIter, 0)  # 0 => never delete
+            model.ext[:VI] = Dict{Symbol,Any}(
+                :disable_after => disable_after,
+                :cons => JuMP.ConstraintRef[],
+            )
+        
+            # Capacity upper-bound: u[s,r] ≤ availability-weighted eligible capacity
+            print_vi = get(vi_cfg, :PrintConstraints, false)
+
+            for (s, system) in enumerate(periods)
+                for (r, cfg) in pairs(vi_cfg.Commodities)
+                    cfg.Enabled || continue
+            
+                    # ---- Capacity upper bound ----
+                    capE = effective_capacity_expr_for_commodity(system, r, cfg.Assets; include_availability=true)
+                    con_ub = @constraint(model, vUAVG[s, r] <= capE)
+                    push!(model.ext[:VI][:cons], con_ub)
+            
+                    # ---- Demand lower bound ----
+                    frac = get(cfg, :DemandFraction, 1.0)
+                    avgD = average_demand_for_commodity(system, r)
+            
+                    con_lb = nothing
+                    if avgD > 0
+                        con_lb = @constraint(model, vUAVG[s, r] >= frac * avgD)
+                        push!(model.ext[:VI][:cons], con_lb)
+                    end
+            
+                    if print_vi
+                        @info "VI capacity UB (s=$s, r=$r): $(JuMP.constraint_object(con_ub))"
+                        if con_lb !== nothing
+                            @info "VI demand LB   (s=$s, r=$r): $(JuMP.constraint_object(con_lb))"
+                        else
+                            @info "VI demand LB   (s=$s, r=$r): skipped (avgD <= 0)"
+                        end
+                    end
+                end
+            end
+            
+        
+            @info "Benders valid inequality constraints added (DisableAfterIter = $disable_after)"
+        end
+        
+        
+    end
 
     @objective(model, Min, model[:eFixedCost] + model[:eApproximateVariableCost])
 
     @info(" -- Planning problem generation complete, it took $(time() - start_time) seconds")
 
-    return model
+    return model, period_to_subproblem_map
 
 end
 
@@ -192,9 +284,7 @@ function update_with_planning_solution!(n::Node, planning_variable_values::Dict)
     if any(isa.(n.constraints, PolicyConstraint))
         ct_all = findall(isa.(n.constraints, PolicyConstraint))
         for ct in ct_all
-            ct_type = typeof(n.constraints[ct])
-            variable_ref = copy(n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")]);
-            n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")] = [planning_variable_values[name(variable_ref[w])] for w in subperiod_indices(n)]
+            update_policy_planning_solution!(n.constraints[ct], n, planning_variable_values)
         end
     end
 

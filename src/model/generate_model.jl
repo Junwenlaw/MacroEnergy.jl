@@ -17,6 +17,7 @@ function generate_model(case::Case)
     om_fixed_cost = Dict()
     investment_cost = Dict()
     variable_cost = Dict()
+    co2_price_cost = Dict()
 
     for (period_idx,system) in enumerate(periods)
 
@@ -26,9 +27,10 @@ function generate_model(case::Case)
         model[:eInvestmentFixedCost] = AffExpr(0.0)
         model[:eOMFixedCost] = AffExpr(0.0)
         model[:eVariableCost] = AffExpr(0.0)
+        model[:eCO2PriceCost] = AffExpr(0.0)
 
         @info(" -- Adding linking variables")
-        add_linking_variables!(system, model) 
+        add_linking_variables!(system, model)
 
         @info(" -- Defining available capacity")
         define_available_capacity!(system, model)
@@ -50,6 +52,9 @@ function generate_model(case::Case)
         @info(" -- Generating operational model")
         operation_model!(system, model)
 
+        # Merge CO2 price cost into variable cost for the objective, then track separately
+        add_to_expression!(model[:eVariableCost], model[:eCO2PriceCost])
+
         model[:eFixedCost] = model[:eInvestmentFixedCost] + model[:eOMFixedCost]
         fixed_cost[period_idx] = model[:eFixedCost];
         investment_cost[period_idx] = model[:eInvestmentFixedCost];
@@ -59,7 +64,9 @@ function generate_model(case::Case)
         unregister(model,:eOMFixedCost)
 
         variable_cost[period_idx] = model[:eVariableCost];
+        co2_price_cost[period_idx] = model[:eCO2PriceCost];
         unregister(model,:eVariableCost)
+        unregister(model,:eCO2PriceCost)
 
     end
 
@@ -86,6 +93,8 @@ function generate_model(case::Case)
 
     @expression(model, eVariableCost, sum(eVariableCostByPeriod[s] for s in 1:num_periods))
 
+    @expression(model, eCO2PriceCostByPeriod[s in 1:num_periods], discount_factor[s] * opexmult[s] * co2_price_cost[s])
+
     @objective(model, Min, model[:eFixedCost] + model[:eVariableCost])
 
     @info(" -- Model generation complete, it took $(time() - start_time) seconds")
@@ -101,6 +110,8 @@ function planning_model!(system::System, model::Model)
     planning_model!.(system.assets, Ref(model))
 
     add_constraints_by_type!(system, model, PlanningConstraint)
+
+    add_global_renewable_share_constraint!(system, model)
 
 end
 
@@ -135,6 +146,92 @@ function add_linking_variables!(system::System, model::Model)
 
     add_linking_variables!.(system.assets, model)
 
+    initialize_vre_balance_data!(system)
+
+end
+
+"""
+    initialize_vre_balance_data!(system::System)
+
+Populate the `:vre_demand` balance dict on electricity nodes that have a
+`RenewableShareConstraint`. Must be called after all assets are loaded (so VRE edge IDs
+are known) and before `operation_model!` (so `update_balance_end!` picks up the correct
+VRE edge coefficients when building the balance expressions).
+
+The `:vre_demand` balance dict on the node maps each VRE edge ID to coefficient 1.0.
+Non-VRE edges get coefficient 0.0 (default when edge ID is not in the dict), so only
+VRE generation accumulates in the `:vre_demand` expression used by RenewableShareConstraint.
+"""
+function initialize_vre_balance_data!(system::System)
+    for loc in system.locations
+        nodes = loc isa Node ? AbstractVertex[loc] :
+                (loc isa Location ? loc.nodes : AbstractVertex[])
+        for node in nodes
+            node isa Node{Electricity} || continue
+            any(isa.(node.constraints, RenewableShareConstraint)) || continue
+            vre_assets = filter(a -> isa(a, VRE) && a.edge.end_vertex === node, system.assets)
+            if isempty(vre_assets)
+                @warn("RenewableShareConstraint on node $(id(node)) but no VRE assets found connected to it. The :vre_demand balance will be empty.")
+            end
+            node.balance_data[:vre_demand] = Dict(a.edge.id => 1.0 for a in vre_assets)
+        end
+    end
+end
+
+"""
+    add_global_renewable_share_constraint!(system::System, model::Model)
+
+Create ONE system-wide planning inequality for `RenewableShareConstraint`:
+
+```math
+\\sum_{n} \\sum_{w} \\text{vVREBudget}_{n,w}
+    \\geq X \\cdot \\sum_{n} \\sum_{w} \\sum_{t \\in w} \\omega(w) \\cdot \\text{demand}_n(t)
+```
+
+where the sums run over **all** `Node{Electricity}` nodes that carry a
+`RenewableShareConstraint`. This ensures the requirement is enforced at the
+system level (total VRE ≥ X% of total demand), not per-node.
+
+All participating nodes must share the same `rhs_policy` value X. The
+resulting constraint reference is stored in every node's
+`policy_budgeting_constraints[RenewableShareConstraint]` for dual extraction.
+"""
+function add_global_renewable_share_constraint!(system::System, model::Model)
+    ct_type = RenewableShareConstraint
+
+    # Collect all electricity nodes with this constraint
+    rsc_nodes = Node{Electricity}[]
+    for loc in system.locations
+        if loc isa Node{Electricity} && any(isa.(loc.constraints, ct_type))
+            push!(rsc_nodes, loc)
+        elseif loc isa Location
+            for n in values(loc.nodes)
+                n isa Node{Electricity} && any(isa.(n.constraints, ct_type)) && push!(rsc_nodes, n)
+            end
+        end
+    end
+
+    isempty(rsc_nodes) && return
+
+    X = rhs_policy(rsc_nodes[1], ct_type)
+
+    # Aggregate VRE budget variables and annual demand across all nodes
+    all_vVREBudget = AffExpr(0.0)
+    total_annual_demand = 0.0
+    for n in rsc_nodes
+        vVREBudget = n.policy_budgeting_vars[Symbol(string(ct_type) * "_VREBudget")]
+        add_to_expression!(all_vVREBudget, sum(vVREBudget))
+        total_annual_demand += sum(
+            subperiod_weight(n, current_subperiod(n, t)) * demand(n, t)
+            for t in time_interval(n)
+        )
+    end
+
+    # Single global planning constraint (stored on all nodes for dual access)
+    global_ct = @constraint(model, all_vVREBudget >= X * total_annual_demand)
+    for n in rsc_nodes
+        n.policy_budgeting_constraints[ct_type] = global_ct
+    end
 end
 
 function add_linking_variables!(a::AbstractAsset, model::Model)

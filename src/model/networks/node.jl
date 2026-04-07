@@ -92,6 +92,18 @@ Node(data::AbstractDict{Symbol,Any}, time_data::TimeData, commodity::DataType) =
 
 ######### Node interface #########
 commodity_type(n::Node{T}) where {T} = T;
+
+# Tracking-only balance IDs: accumulated for policy constraints but NOT constrained to zero
+# by BalanceConstraint. Add any future tracking balance names here.
+const _NODE_TRACKING_BALANCE_IDS = Set{Symbol}([:vre_demand])
+
+"""
+    balance_constraint_ids(n::Node)
+
+Return the subset of balance IDs that `BalanceConstraint` should enforce to zero,
+excluding tracking-only balances (e.g., `:vre_demand`) used solely by policy constraints.
+"""
+balance_constraint_ids(n::Node) = [i for i in balance_ids(n) if i ∉ _NODE_TRACKING_BALANCE_IDS]
 demand(n::Node) = n.demand;
 # demand(n::Node, t::Int64) = length(demand(n)) == 1 ? demand(n)[1] : demand(n)[t];
 function demand(n::Node, t::Int64)
@@ -135,16 +147,26 @@ function add_linking_variables!(n::Node, model::Model)
     if any(isa.(n.constraints, PolicyConstraint))
         ct_all = findall(isa.(n.constraints, PolicyConstraint))
         for ct in ct_all
-
-            ct_type = typeof(n.constraints[ct])
-            n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")] = @variable(
-                model,
-                [w in subperiod_indices(n)],
-                base_name = "v" * string(ct_type) * "_Budget_$(id(n))_period$(period_index(n))"
-            )
+            add_policy_linking_vars!(n.constraints[ct], n, model)
         end
     end
 
+end
+
+"""
+    add_policy_linking_vars!(ct::PolicyConstraint, n::Node, model::Model)
+
+Default implementation: creates one budget variable per subperiod for a policy constraint.
+Constraint-specific overrides can be defined (e.g., for RenewableShareConstraint which
+needs two budget variables).
+"""
+function add_policy_linking_vars!(ct::PolicyConstraint, n::Node, model::Model)
+    ct_type = typeof(ct)
+    n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")] = @variable(
+        model,
+        [w in subperiod_indices(n)],
+        base_name = "v" * string(ct_type) * "_Budget_$(id(n))_period$(period_index(n))"
+    )
 end
 
 function define_available_capacity!(n::Node, model::Model)
@@ -158,15 +180,43 @@ function planning_model!(n::Node, model::Model)
     if any(isa.(n.constraints, PolicyConstraint))
         ct_all = findall(isa.(n.constraints, PolicyConstraint))
         for ct in ct_all
-            ct_type = typeof(n.constraints[ct])
-            n.policy_budgeting_constraints[ct_type] = @constraint(
-                model,
-                sum(n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")]) ==
-                rhs_policy(n, ct_type)
-            )
+            add_policy_planning_constraint!(n.constraints[ct], n, model)
         end
     end
     return nothing
+end
+
+"""
+    add_policy_planning_constraint!(ct::PolicyConstraint, n::Node, model::Model)
+
+Default implementation: creates one planning constraint summing the single budget variable
+across subperiods and enforcing equality with `rhs_policy`.
+Constraint-specific overrides can be defined (e.g., for RenewableShareConstraint which
+needs an inequality constraint between two budget variable sums).
+"""
+function add_policy_planning_constraint!(ct::PolicyConstraint, n::Node, model::Model)
+    ct_type = typeof(ct)
+    n.policy_budgeting_constraints[ct_type] = @constraint(
+        model,
+        sum(n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")]) ==
+        rhs_policy(n, ct_type)
+    )
+end
+
+"""
+    update_policy_planning_solution!(ct::PolicyConstraint, n::Node, planning_variable_values::Dict)
+
+Default implementation: replaces the single `_Budget` variable array with the
+fixed Float64 values from the planning solution (used in Benders subproblems).
+Constraint-specific overrides can be defined (e.g., for RenewableShareConstraint
+which has `_VREBudget` and `_TotalBudget` instead of `_Budget`).
+"""
+function update_policy_planning_solution!(ct::PolicyConstraint, n::Node, planning_variable_values::Dict)
+    ct_type = typeof(ct)
+    variable_ref = copy(n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")])
+    n.policy_budgeting_vars[Symbol(string(ct_type) * "_Budget")] = [
+        planning_variable_values[name(variable_ref[w])] for w in subperiod_indices(n)
+    ]
 end
 
 function operation_model!(n::Node, model::Model)
@@ -256,7 +306,13 @@ function make(commodity::Type{<:Commodity}, input_data::AbstractDict{Symbol,Any}
     if any(isa.(node.constraints, BalanceConstraint))
         node.balance_data =
             get(data, :balance_data, Dict(:demand => Dict{Symbol,Float64}()))
-    elseif any(isa.(node.constraints, CO2CapConstraint))
+        # Add VRE tracking balance if RenewableShareConstraint is also present.
+        # The dict starts empty and is populated with VRE edge IDs in initialize_vre_balance_data!
+        # (called from add_linking_variables!) before operation_model! runs.
+        if any(isa.(node.constraints, RenewableShareConstraint))
+            node.balance_data[:vre_demand] = Dict{Symbol,Float64}()
+        end
+    elseif any(isa.(node.constraints, CO2CapConstraint)) || any(isa.(node.constraints, CO2PriceConstraint))
         node.balance_data =
             get(data, :balance_data, Dict(:emissions => Dict{Symbol,Float64}()))
     elseif any(isa.(node.constraints, CO2StorageConstraint))

@@ -96,37 +96,41 @@ end
 # - Total cost
 function prepare_undiscounted_costs(model::Union{Model,NamedTuple}, scaling::Float64=1.0)
     fixed_cost = value(model[:eFixedCost])
-    variable_cost = value(model[:eVariableCost])
-    total_cost = fixed_cost + variable_cost
+    total_variable_cost = value(model[:eVariableCost])
+    co2_price_cost = haskey(model, :eUndiscountedCO2PriceCost) ? value(model[:eUndiscountedCO2PriceCost]) : 0.0
+    operational_cost = total_variable_cost - co2_price_cost
+    total_cost = fixed_cost + total_variable_cost
     return DataFrame(
-        case_name = fill(:missing, 3),
-        commodity = fill(:all, 3),
-        commodity_subtype = fill(:cost, 3),
-        zone = fill(:all, 3),
-        resource_id = fill(:all, 3),
-        component_id = fill(:all, 3),
-        type = fill(:Cost, 3),
-        variable = [:FixedCost, :VariableCost, :TotalCost],
-        year = fill(:missing, 3),
-        value = [fixed_cost, variable_cost, total_cost] .* scaling^2
+        case_name = fill(:missing, 4),
+        commodity = fill(:all, 4),
+        commodity_subtype = fill(:cost, 4),
+        zone = fill(:all, 4),
+        resource_id = fill(:all, 4),
+        component_id = fill(:all, 4),
+        type = fill(:Cost, 4),
+        variable = [:FixedCost, :VariableCost, :CO2PriceCost, :TotalCost],
+        year = fill(:missing, 4),
+        value = [fixed_cost, operational_cost, co2_price_cost, total_cost] .* scaling^2
     )
 end
 
 function prepare_discounted_costs(model::Union{Model,NamedTuple}, scaling::Float64=1.0)
     fixed_cost = value(model[:eDiscountedFixedCost])
-    variable_cost = value(model[:eDiscountedVariableCost])
-    total_cost = fixed_cost + variable_cost
+    total_variable_cost = value(model[:eDiscountedVariableCost])
+    co2_price_cost = haskey(model, :eDiscountedCO2PriceCost) ? value(model[:eDiscountedCO2PriceCost]) : 0.0
+    operational_cost = total_variable_cost - co2_price_cost
+    total_cost = fixed_cost + total_variable_cost
     return DataFrame(
-        case_name = fill(:missing, 3),
-        commodity = fill(:all, 3),
-        commodity_subtype = fill(:cost, 3),
-        zone = fill(:all, 3),
-        resource_id = fill(:all, 3),
-        component_id = fill(:all, 3),
-        type = fill(:Cost, 3),
-        variable = [:DiscountedFixedCost, :DiscountedVariableCost, :DiscountedTotalCost],
-        year = fill(:missing, 3),
-        value = [fixed_cost, variable_cost, total_cost] .* scaling^2
+        case_name = fill(:missing, 4),
+        commodity = fill(:all, 4),
+        commodity_subtype = fill(:cost, 4),
+        zone = fill(:all, 4),
+        resource_id = fill(:all, 4),
+        component_id = fill(:all, 4),
+        type = fill(:Cost, 4),
+        variable = [:DiscountedFixedCost, :DiscountedVariableCost, :DiscountedCO2PriceCost, :DiscountedTotalCost],
+        year = fill(:missing, 4),
+        value = [fixed_cost, operational_cost, co2_price_cost, total_cost] .* scaling^2
     )
 end
 
@@ -193,6 +197,11 @@ function create_discounted_cost_expressions!(model::Model, system::System, setti
 
     unregister(model,:eDiscountedVariableCost)
     model[:eDiscountedVariableCost] = model[:eVariableCostByPeriod][period_index]
+
+    unregister(model, :eDiscountedCO2PriceCost)
+    if haskey(model, :eCO2PriceCostByPeriod)
+        model[:eDiscountedCO2PriceCost] = model[:eCO2PriceCostByPeriod][period_index]
+    end
 end
 
 function compute_undiscounted_costs!(model::Model, system::System, settings::NamedTuple)
@@ -214,5 +223,10 @@ function compute_undiscounted_costs!(model::Model, system::System, settings::Nam
     opexmult = sum([1 / (1 + discount_rate)^(i) for i in 1:period_lengths[period_index]])
 
     model[:eVariableCost] = period_lengths[period_index]*model[:eVariableCostByPeriod][period_index]/(discount_factor * opexmult)
+
+    unregister(model, :eUndiscountedCO2PriceCost)
+    if haskey(model, :eCO2PriceCostByPeriod)
+        model[:eUndiscountedCO2PriceCost] = period_lengths[period_index]*model[:eCO2PriceCostByPeriod][period_index]/(discount_factor * opexmult)
+    end
 
 end

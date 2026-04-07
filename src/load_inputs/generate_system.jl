@@ -23,13 +23,25 @@ function generate_system!(system::System, system_data::AbstractDict{Symbol,Any})
     # Load the commodities
     system.commodities = load_commodities(system_data[:commodities], system.data_dirpath; write_subcommodities=system.settings.WriteSubcommodities)
 
-    # Load the locations
-    load_locations!(system, system.data_dirpath, system_data[:locations])
+    # Load the locations (optional — omit if the model has no multi-node Location objects)
+    if haskey(system_data, :locations)
+        load_locations!(system, system.data_dirpath, system_data[:locations])
+    end
 
     # Load the time data
-    system.time_data =
-        load_time_data(system_data[:time_data], system.commodities, system.data_dirpath)
+    if haskey(system_data, :TDR_time_data) && MacroEnergy.GLOBAL_TDR_FLAG[] == 1
+        @info "TDR active: loading time data from TDR results"
 
+        system.time_data = load_time_data(system_data[:TDR_time_data],
+                                        system.commodities,
+                                        system.data_dirpath)
+    else
+        @info "Loading time data from system/time_data.json"
+        system.time_data = load_time_data(system_data[:time_data],
+                                        system.commodities,
+                                        system.data_dirpath)
+    end
+    
     # Load the nodes
     load!(system, system_data[:nodes])
 

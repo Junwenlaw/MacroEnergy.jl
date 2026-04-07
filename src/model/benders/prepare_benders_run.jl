@@ -101,3 +101,117 @@ function create_worker_process(pid,project,case_path::AbstractString)
     Distributed.remotecall_eval(MacroEnergy, pid, :(MacroEnergy.load_user_additions($additions_path)))
 
 end
+
+
+## Utility functions for MP valid inequalities
+"""
+Return asset type Symbols enabled (=1) in the valid inequalities settings for a commodity.
+"""
+function enabled_asset_types(asset_cfg)::Vector{Symbol}
+    enabled = Symbol[]
+    for (a, flag) in pairs(asset_cfg)
+        flag == 1 && push!(enabled, a)
+    end
+    return enabled
+end
+
+"""
+Compute average demand for a commodity in a given system (period).
+Works with full-year or TDR because it uses the model's time representation.
+"""
+function average_demand_for_commodity(system::System,
+                                      commodity::Symbol)
+
+    ctype = commodity_types()[commodity]
+
+    # Collect all nodes of this commodity
+    nodes = Node[]
+    for obj in get_nodes(system)
+        if obj isa Node && commodity_type(obj) == ctype
+            push!(nodes, obj)
+        elseif obj isa Location
+            for n in values(obj.nodes)
+                commodity_type(n) == ctype && push!(nodes, n)
+            end
+        end
+    end
+
+    isempty(nodes) && return 0.0
+
+    total = 0.0
+    hours = 0.0
+
+    # Use one reference node for the time axis
+    ref = nodes[1]
+
+    for t in time_interval(ref)
+        w  = current_subperiod(ref, t)
+        wt = subperiod_weight(ref, w)
+
+        system_demand_t = 0.0
+        for n in nodes
+            system_demand_t += demand(n, t)
+        end
+
+        total += wt * system_demand_t
+        hours += wt
+    end
+
+    avgD = hours > 0 ? total / hours : 0.0
+
+    return avgD
+end
+
+
+function average_availability(e::AbstractEdge)::Float64
+    total = 0.0
+    hours = 0.0
+
+    # If somehow no time steps exist, treat as always available
+    ts = collect(time_interval(e))
+    isempty(ts) && return 1.0
+
+    for t in ts
+        w  = current_subperiod(e, t)
+        wt = subperiod_weight(e, w)
+        total += wt * availability(e, t)
+        hours += wt
+    end
+
+    return hours > 0 ? total / hours : 1.0
+end
+
+
+function effective_capacity_expr_for_commodity(
+    system::System,
+    commodity::Symbol,
+    asset_cfg;
+    include_availability::Bool = true,
+)
+
+    asset_types = enabled_asset_types(asset_cfg)
+    isempty(asset_types) && return AffExpr(0.0)
+
+    edges, edge_asset_map =
+        edges_with_capacity_variables(system.assets; return_ids_map=true)
+
+    (found_comm, _) = search_commodities(
+        string(commodity),
+        string.(unique(MacroEnergy.commodity_type.(edges)))
+    )
+    filter_edges_by_commodity!(edges, found_comm, edge_asset_map)
+
+    available_types = string.(unique(get_type(asset) for asset in values(edge_asset_map)))
+    (found_assets, _) = search_assets(string.(asset_types), available_types)
+    filter_edges_by_asset_type!(edges, found_assets, edge_asset_map)
+
+    expr = AffExpr(0.0)
+    for e in edges
+        α = include_availability ? average_availability(e) : 1.0
+        expr += α * capacity(e)
+    end
+
+    return expr
+end
+
+

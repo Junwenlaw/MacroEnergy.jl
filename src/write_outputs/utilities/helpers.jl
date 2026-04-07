@@ -5,7 +5,7 @@ Common helper functions for output generation.
 # Get the commodity type of a MacroObject
 get_commodity_name(obj::AbstractEdge) = typesymbol(commodity_type(obj))
 get_commodity_name(obj::Node) = typesymbol(commodity_type(obj))
-get_commodity_name(obj::Storage) = typesymbol(commodity_type(obj))
+get_commodity_name(obj::AbstractStorage) = typesymbol(commodity_type(obj))
 
 # The commodity subtype is an identifier for the field names
 # e.g., "capacity" for capacity variables, "flow" for flow variables, etc.
@@ -39,20 +39,30 @@ get_node_in(e::AbstractEdge) = id(e.start_vertex)
 get_node_out(e::AbstractEdge) = id(e.end_vertex)
 
 # The resource id is the id of the asset that the object belongs to
-function get_resource_id(obj::T, asset_map::Dict{Symbol,Base.RefValue{<:AbstractAsset}}) where {T<:Union{AbstractEdge,Storage}}
+function get_resource_id(obj::T, asset_map::Dict{Symbol,Base.RefValue{<:AbstractAsset}}) where {T<:Union{AbstractEdge,AbstractStorage}}
     asset = asset_map[id(obj)]
     asset[].id
 end
 get_resource_id(obj::Node) = id(obj)
 
 # The component id is the id of the object itself
-get_component_id(obj::T) where {T<:Union{AbstractEdge,Node,Storage}} = Symbol("$(id(obj))")
+get_component_id(obj::T) where {T<:Union{AbstractEdge,Node,AbstractStorage}} = Symbol("$(id(obj))")
 
 # Get the type of an asset
-get_type(asset::Base.RefValue{<:AbstractAsset}) = Symbol(typeof(asset).parameters[1])
+function get_type(asset::Base.RefValue{<:AbstractAsset})
+    asset = asset[]
+    type_name = string(typesymbol(typeof(asset)))
+    param_names = string.(typesymbol.(typeof(asset).parameters))
+    if !isempty(param_names)
+        return Symbol("\"$type_name{$(join(param_names, ","))}\"")
+    else
+        return Symbol(type_name)
+    end   
+end
+
 # Get the type of a MacroObject
-get_type(obj::T) where {T<:Union{AbstractEdge,Node,Storage}} = Symbol(typeof(obj))
+get_type(obj::T) where {T<:Union{AbstractEdge,Node,AbstractStorage}} = Symbol(typeof(obj))
 
 # Get the unit of a MacroObject
 get_unit(obj::AbstractEdge, f::Function) = unit(commodity_type(obj.timedata), f)    #TODO: check if this is correct
-get_unit(obj::T, f::Function) where {T<:Union{Node,Storage}} = unit(commodity_type(obj), f)
+get_unit(obj::T, f::Function) where {T<:Union{Node,AbstractStorage}} = unit(commodity_type(obj), f)

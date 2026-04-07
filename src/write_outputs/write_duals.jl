@@ -36,11 +36,12 @@ function write_duals(
     scaling::Float64=1.0
 )
     @info "Writing constraint dual values to $results_dir"
-    
+
     # Export each constraint type to its own file
     write_balance_duals(results_dir, system, scaling)
     write_co2_cap_duals(results_dir, system, scaling)
-    
+    write_renewable_share_duals(results_dir, system, scaling)
+
     return nothing
 end
 
@@ -73,9 +74,11 @@ function write_duals_benders(
     # Note: with Benders, the duals for balance constraints don't need to be undiscounted
     # as the objective function for the operational subproblems is already undiscounted
     write_balance_duals(results_dir, system)
-    # Duals for CO2 cap constraints comes from the planning problem which is discounted
+    # Duals for planning-side policy constraints come from the planning problem which is
+    # discounted, so scaling is applied to recover the undiscounted shadow price.
     write_co2_cap_duals(results_dir, system, scaling)
-    
+    write_renewable_share_duals(results_dir, system, scaling)
+
     return nothing
 end
 
@@ -244,6 +247,87 @@ function write_co2_cap_duals(
 
     write_dataframe(file_path, df)
     @debug "Wrote $(nrow(df)) CO2 cap constraint dual values to: $file_path"
+
+    return nothing
+end
+
+"""
+    write_renewable_share_duals(results_dir::AbstractString, system::System, scaling::Float64=1.0)
+
+Write renewable generation share constraint dual values (shadow prices) to CSV file.
+
+Extracts the dual of the annual planning inequality constraint
+(`sum(vVREBudget) >= X * annual_demand`) for each electricity node that has a
+`RenewableShareConstraint`, and exports them to `renewable_share_duals.csv`.
+If slack variables exist (`price_unmet_policy` was set), also exports the total weighted
+slack (VRE generation shortfall below the X% of demand target).
+
+# Output Format
+Long-format CSV with columns:
+- `Node`: Node ID
+- `RS_Shadow_Price`: Shadow price of the annual renewable share constraint
+- `RS_Slack`: Total weighted shortfall below the X% target (if soft constraint is active)
+
+# Arguments
+- `results_dir::AbstractString`: Directory where CSV file will be written
+- `system::System`: The system containing solved constraints with dual values
+- `scaling::Float64`: Scaling factor for dual values (accounts for discounting in multi-period)
+
+# Examples
+```julia
+write_renewable_share_duals("results/", system)
+# Creates: results/renewable_share_duals.csv
+```
+"""
+function write_renewable_share_duals(
+    results_dir::AbstractString,
+    system::System,
+    scaling::Float64=1.0
+)
+    @info "Writing renewable share constraint dual values to $results_dir"
+
+    filename = "renewable_share_duals.csv"
+    file_path = joinpath(results_dir, filename)
+
+    ct_type = RenewableShareConstraint
+    slack_key = Symbol(string(ct_type) * "_Slack")
+
+    # Collect all participating nodes (those with the global planning constraint stored)
+    participating = [n for n in system.locations if n isa Node &&
+                     haskey(policy_budgeting_constraints(n), ct_type)]
+
+    if isempty(participating)
+        @info "No renewable share constraints found to export"
+        return nothing
+    end
+
+    # The global constraint is stored on all participating nodes; extract the dual once.
+    global_constraint = policy_budgeting_constraints(participating[1], ct_type)
+    # Shadow price: negative dual because constraint is >= (positive when binding)
+    rs_shadow_price = -dual(global_constraint) / scaling
+
+    # Aggregate weighted slack across all participating nodes
+    has_slack = any(haskey(price_unmet_policy(n), ct_type) for n in participating)
+    total_slack = 0.0
+    if has_slack
+        for n in participating
+            haskey(price_unmet_policy(n), ct_type) || continue
+            haskey(policy_slack_vars(n), slack_key) || continue
+            slack_vars = value.(policy_slack_vars(n)[slack_key])
+            total_slack += sum(subperiod_indices(n)) do w
+                subperiod_weight(n, w) * slack_vars[w]
+            end
+        end
+    end
+
+    df = DataFrame(
+        Scope = [:System],
+        RS_Shadow_Price = [rs_shadow_price],
+    )
+    has_slack && (df[!, :RS_Slack] = [total_slack])
+
+    write_dataframe(file_path, df)
+    @debug "Wrote renewable share global constraint dual to: $file_path"
 
     return nothing
 end

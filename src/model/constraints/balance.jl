@@ -22,7 +22,7 @@ function add_model_constraint!(ct::BalanceConstraint, v::AbstractVertex, model::
 
     ct.constraint_ref = @constraint(
         model,
-        [i in balance_ids(v), t in time_interval(v)],
+        [i in balance_constraint_ids(v), t in time_interval(v)],
         get_balance(v, i, t) == 0.0
     )
 
@@ -58,7 +58,7 @@ function set_constraint_dual!(
 
     # Extract dual values for all balance IDs
     constraint.constraint_dual = Dict{Symbol, Vector{Float64}}()
-    for balance_id in balance_ids(v)
+    for balance_id in balance_constraint_ids(v)
         constraint.constraint_dual[balance_id] = dual.(constraint.constraint_ref[balance_id, :].data)
     end
 

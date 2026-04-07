@@ -12,6 +12,7 @@ using InteractiveUtils
 using Printf: @printf
 using MacroEnergyScaling
 using MacroEnergySolvers
+using MacroEnergyTimeReduction
 using Pkg
 using DistributedArrays
 using Distributed
@@ -20,6 +21,7 @@ using GitHub
 using Markdown
 using Logging
 using LoggingExtras
+using StatsBase
 
 import MacroEnergyScaling: scale_constraints!
 import JuMP: set_optimizer, set_optimizer_attributes
@@ -135,6 +137,7 @@ end
 
 # include files
 include_all_in_folder("utilities")
+include_all_in_folder("time_domain_reduction")
 
 include("model/units.jl")
 include("model/time_management.jl")
@@ -156,6 +159,11 @@ include("model/solver.jl")
 include("model/myopic.jl")
 include_all_in_folder("model/constraints")
 include_all_in_folder("model/benders")
+# Stochastic: explicit order required — stochastic_case.jl must precede files that use StochasticCase
+include("model/stochastic/stochastic_case.jl")
+include("model/stochastic/stochastic_monolithic.jl")
+include("model/stochastic/stochastic_benders.jl")
+include("model/stochastic/stochastic_solve.jl")
 
 include("model/assets/battery.jl")
 include("model/assets/electrolyzer.jl")
@@ -197,7 +205,11 @@ include_all_in_folder("load_inputs")
 
 include_all_in_folder("write_outputs/")
 
-export AbstractAsset,
+export StochasticCase,
+    StochasticScenario,
+    load_stochastic_case,
+    run_stochastic_case,
+    AbstractAsset,
     AbstractTypeConstraint,
     AgeBasedRetirementConstraint,
     Alumina,
@@ -222,6 +234,7 @@ export AbstractAsset,
     BlastFurnaceBasicOxygenFurnaceCCS,
     CO2,
     CO2CapConstraint,
+    CO2PriceConstraint,
     CO2Captured,
     CO2Injection,
     CO2StorageConstraint,
@@ -275,6 +288,7 @@ export AbstractAsset,
     PlanningConstraint,
     PolicyConstraint,
     RampingLimitConstraint,
+    RenewableShareConstraint,
     run_case,
     SteelScrap,
     Storage,
@@ -298,6 +312,7 @@ export AbstractAsset,
     write_costs,
     write_dataframe,
     write_duals,
+    write_time_weights,
     write_flow,
     write_results,
     template_system,

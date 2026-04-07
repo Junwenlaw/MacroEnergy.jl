@@ -1,7 +1,8 @@
-function prepare_costs_benders(system::System, 
-    bd_results::BendersResults, 
-    subop_indices::Vector{Int64}, 
-    settings::NamedTuple
+function prepare_costs_benders(system::System,
+    bd_results::BendersResults,
+    subop_indices::Vector{Int64},
+    settings::NamedTuple,
+    period_to_subproblem_map::Dict{Int,Vector{Int}}
 )
     planning_problem = bd_results.planning_problem
     subop_sol = bd_results.subop_sol
@@ -11,22 +12,89 @@ function prepare_costs_benders(system::System,
     compute_undiscounted_costs!(planning_problem, system, settings)
 
     # Evaluate the fixed cost expressions in the planning problem. Note that this expression has been re-built
-    # in compute_undiscounted_costs! to utilize undiscounted costs and the Benders planning solutions that are 
+    # in compute_undiscounted_costs! to utilize undiscounted costs and the Benders planning solutions that are
     # stored in system. So, no need to re-evaluate the expression on planning_variable_values.
     fixed_cost = value(planning_problem[:eFixedCost])
     # Evaluate the discounted fixed cost expression on the Benders planning solutions
     discounted_fixed_cost = value(x -> planning_variable_values[name(x)], planning_problem[:eDiscountedFixedCost])
 
     # evaluate the variable cost expressions using the subproblem solutions
-    variable_cost = evaluate_vtheta_in_expression(planning_problem, :eVariableCost, subop_sol, subop_indices)
-    discounted_variable_cost = evaluate_vtheta_in_expression(planning_problem, :eDiscountedVariableCost, subop_sol, subop_indices)
+    if settings.BendersSettings[:BendersCut] == "multi" || settings.BendersSettings[:BendersCut] == "group_disaggregated"
+        variable_cost = evaluate_vtheta_in_expression_multi_cuts(planning_problem, :eVariableCost, subop_sol, subop_indices)
+        discounted_variable_cost = evaluate_vtheta_in_expression_multi_cuts(planning_problem, :eDiscountedVariableCost, subop_sol, subop_indices)
+    elseif settings.BendersSettings[:BendersCut] == "single"
+        variable_cost = evaluate_vtheta_in_expression_single_cut(planning_problem, :eVariableCost, subop_sol, period_to_subproblem_map)
+        discounted_variable_cost = evaluate_vtheta_in_expression_single_cut(planning_problem, :eDiscountedVariableCost, subop_sol, period_to_subproblem_map)
+    elseif settings.BendersSettings[:BendersCut] == "group"
+        final_group_map = bd_results.final_group_map
+        variable_cost = evaluate_vtheta_in_expression_group_cuts(planning_problem, :eVariableCost, subop_sol, final_group_map)
+        discounted_variable_cost = evaluate_vtheta_in_expression_group_cuts(planning_problem, :eDiscountedVariableCost, subop_sol, final_group_map)
+    end
 
+    # Collect CO2 price cost from the final solved subproblem models
+    co2_price_cost_raw = collect_co2_price_cost_benders(bd_results.op_subproblem, subop_indices)
+
+    period_index = system.time_data[:Electricity].period_index
+    period_length = settings.PeriodLengths[period_index]
+    cum_years = sum(settings.PeriodLengths[i] for i in 1:period_index-1; init=0)
+    discount_factor = 1 / (1 + settings.DiscountRate)^cum_years
+    opexmult = sum(1 / (1 + settings.DiscountRate)^i for i in 1:period_length)
+
+    discounted_co2_price_cost = discount_factor * opexmult * co2_price_cost_raw
+    undiscounted_co2_price_cost = period_length * co2_price_cost_raw
+
+    # eVariableCost and eDiscountedVariableCost include CO2 price cost.
+    # write_cost.jl's prepare_*_costs functions decompose them into
+    # operational (excl. CO2) and CO2PriceCost separately, so do NOT
+    # subtract CO2 here to avoid double-counting in the cost output.
     return (
         eFixedCost = fixed_cost,
         eVariableCost = variable_cost,
         eDiscountedFixedCost = discounted_fixed_cost,
-        eDiscountedVariableCost = discounted_variable_cost
+        eDiscountedVariableCost = discounted_variable_cost,
+        eUndiscountedCO2PriceCost = undiscounted_co2_price_cost,
+        eDiscountedCO2PriceCost = discounted_co2_price_cost,
     )
+end
+
+"""
+Collect total CO2 price cost across all relevant subproblems.
+The `subop_indices` argument selects only the subproblems for the current period.
+"""
+function collect_co2_price_cost_benders(
+    op_subproblem::Vector{Dict{Any,Any}},
+    subop_indices::Vector{Int64}
+)
+    total = 0.0
+    for i in subop_indices
+        sp_model = op_subproblem[i][:model]
+        if haskey(sp_model, :eCO2PriceCost)
+            total += value(sp_model[:eCO2PriceCost])
+        end
+    end
+    return total
+end
+
+function collect_co2_price_cost_benders(
+    op_subproblem::DistributedArrays.DArray,
+    subop_indices::Vector{Int64}
+)
+    p_id = workers()
+    np_id = length(p_id)
+    co2_costs = Vector{Float64}(undef, np_id)
+    @sync for i in 1:np_id
+        @async co2_costs[i] = @fetchfrom p_id[i] begin
+            local_subproblems = DistributedArrays.localpart(op_subproblem)
+            local_total = 0.0
+            for sp in local_subproblems
+                if haskey(sp[:model], :eCO2PriceCost)
+                    local_total += value(sp[:model][:eCO2PriceCost])
+                end
+            end
+            local_total
+        end
+    end
+    return sum(co2_costs)
 end
     
 """

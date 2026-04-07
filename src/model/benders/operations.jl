@@ -5,7 +5,8 @@ function generate_operation_subproblem(system::System,include_subproblem_slacks:
     @variable(model, vREF == 1)
 
     model[:eVariableCost] = AffExpr(0.0)
-    
+    model[:eCO2PriceCost] = AffExpr(0.0)
+
     add_linking_variables!(system, model)
 
     linking_variables = name.(setdiff(all_variables(model), model[:vREF]))
@@ -13,6 +14,9 @@ function generate_operation_subproblem(system::System,include_subproblem_slacks:
     define_available_capacity!(system, model)
 
     operation_model!(system, model)
+
+    # Merge CO2 price cost into variable cost for the subproblem objective
+    add_to_expression!(model[:eVariableCost], model[:eCO2PriceCost])
 
     if include_subproblem_slacks == true
         @info("Adding slack variables to ensure subproblems are always feasible")
@@ -212,7 +216,7 @@ function get_all_balance_constraints(system::System)
         if isa(n,Node) #### && isempty(non_served_demand(n)) 
             for c in n.constraints
                 if isa(c, BalanceConstraint)
-                    for i in balance_ids(n)
+                    for i in balance_constraint_ids(n)
                         for t in time_interval(n)
                             push!(balance_constraints, c.constraint_ref[i,t])
                         end
@@ -251,15 +255,18 @@ end
 function get_all_policy_constraints(system::System)
     policy_constraints = Vector{JuMPConstraint}();
     for n in system.locations
-        if isa(n,Node) && isempty(n.price_unmet_policy)
+        if isa(n,Node)
             for c in n.constraints
-                if isa(c, PolicyConstraint)
+                if isa(c, PolicyConstraint) && !haskey(price_unmet_policy(n), typeof(c))
+                    # Skip constraints with no operation-side constraint ref (e.g., constraints
+                    # whose linking variables are always feasible and need no slack relaxation)
+                    (ismissing(c.constraint_ref) || isnothing(c.constraint_ref)) && continue
                     for w in subperiod_indices(n)
                         push!(policy_constraints, c.constraint_ref[w])
                     end
                 end
             end
         end
-    end 
+    end
     return policy_constraints
 end
