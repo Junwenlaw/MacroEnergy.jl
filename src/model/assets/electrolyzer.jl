@@ -1,7 +1,7 @@
 struct Electrolyzer <: AbstractAsset
     id::AssetId
     electrolyzer_transform::Transformation
-    h2_edge::Edge{<:Hydrogen}
+    h2_edge::Union{Edge{<:Hydrogen},EdgeWithUC{<:Hydrogen}}
     elec_edge::Edge{<:Electricity}
 end
 
@@ -53,6 +53,13 @@ function simple_default_data(::Type{Electrolyzer}, id=missing)
         :investment_cost => 0.0,
         :fixed_om_cost => 0.0,
         :variable_om_cost => 0.0,
+        :uc => false,
+        :startup_cost => 0.0,
+        :startup_fuel_consumption => 0.0,
+        :min_up_time => 0,
+        :min_down_time => 0,
+        :ramp_up_fraction => 1.0,
+        :ramp_down_fraction => 1.0,
     )
 end
 
@@ -149,7 +156,9 @@ function make(asset_type::Type{Electrolyzer}, data::AbstractDict{Symbol,Any}, sy
         Hydrogen,
         [(h2_edge_data, :end_vertex), (data, :location)],
     )
-    h2_edge = Edge(
+    has_uc = get(h2_edge_data, :uc, false)
+    EdgeType = has_uc ? EdgeWithUC : Edge
+    h2_edge = EdgeType(
         Symbol(id, "_", h2_edge_key),
         h2_edge_data,
         system.time_data[:Hydrogen],
@@ -157,6 +166,15 @@ function make(asset_type::Type{Electrolyzer}, data::AbstractDict{Symbol,Any}, sy
         h2_start_node,
         h2_end_node,
     )
+    if has_uc
+        uc_constraints = [MinUpTimeConstraint(), MinDownTimeConstraint()]
+        for c in uc_constraints
+            if !(c in h2_edge.constraints)
+                push!(h2_edge.constraints, c)
+            end
+        end
+        h2_edge.startup_fuel_balance_id = :energy
+    end
 
     electrolyzer.balance_data = Dict(
         :energy => Dict(
