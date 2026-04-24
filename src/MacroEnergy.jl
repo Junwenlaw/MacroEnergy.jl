@@ -181,7 +181,6 @@ include_all_in_folder("model/benders")
 # Stochastic: explicit order required — stochastic_case.jl must precede files that use StochasticCase
 include("model/stochastic/stochastic_case.jl")
 include("model/stochastic/stochastic_monolithic.jl")
-include("model/stochastic/stochastic_benders.jl")
 include("model/stochastic/stochastic_solve.jl")
 
 include("utilities/postprocessing.jl")

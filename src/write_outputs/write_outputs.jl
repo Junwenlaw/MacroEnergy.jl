@@ -214,23 +214,27 @@ Write results for a stochastic monolithic solve:
 - `results/scenario_{id}/costs_by_type.csv`          — per-scenario cost breakdown by asset type
 - `results/scenario_{id}/costs_by_zone.csv`          — per-scenario cost breakdown by zone
 - `results/scenario_{id}/balance_duals.csv`          — per-scenario balance duals (if enabled)
-- `results/costs.csv`                                — aggregate expected costs
-- `results/scenario_costs.csv`                       — per-scenario cost breakdown
+- `results/costs.csv`                                — aggregate expected discounted costs (probability-weighted)
+- `results/undiscounted_costs.csv`                   — aggregate expected undiscounted costs (probability-weighted)
+- `results/scenario_costs.csv`                       — per-scenario discounted costs (DiscountedFixedCost, DiscountedVariableCost, DiscountedTotalCost)
+- `results/scenario_undiscounted_costs.csv`          — per-scenario undiscounted costs (FixedCost, VariableCost, TotalCost)
 - `results/settings.json`                            — case + stochastic settings
 """
 function write_outputs(case_path::AbstractString, sc::StochasticCase, model::Model)
     inv_sys  = investment_system(sc)
     settings = get_settings(sc)
     results_dir = create_output_path(inv_sys, case_path)
+    data_dir    = joinpath(results_dir, "results")
+    mkpath(data_dir)
 
-    write_capacity(joinpath(results_dir, "capacity.csv"), inv_sys)
+    write_capacity(joinpath(data_dir, "capacity.csv"), inv_sys)
 
     if any(s.system.settings.DualExportsEnabled for s in sc.scenarios)
         ensure_duals_available!(model)
     end
 
     for sc_r in sc.scenarios
-        sc_dir = joinpath(results_dir, "scenario_$(sc_r.id)")
+        sc_dir = joinpath(data_dir, "scenario_$(sc_r.id)")
         mkpath(sc_dir)
         write_flow(joinpath(sc_dir, "flows.csv"), sc_r.system)
         write_non_served_demand(joinpath(sc_dir, "non_served_demand.csv"), sc_r.system)
@@ -256,174 +260,71 @@ function write_outputs(case_path::AbstractString, sc::StochasticCase, model::Mod
         _stochastic_set_period_index!(sc_r.system, sc_r.id)
     end
 
-    _write_stochastic_costs(results_dir, model)
+    _write_stochastic_costs(data_dir, sc, model)
     write_settings(sc, joinpath(results_dir, "settings.json"))
 
     return results_dir
 end
 
-"""
-    write_outputs(case_path, sc::StochasticCase, bd_results::BendersResults)
 
-Write results for a stochastic Benders solve:
-- `results/capacity.csv`                             — shared investment capacity
-- `results/scenario_{id}/flows.csv`                  — per-scenario operational flows
-- `results/scenario_{id}/costs_by_type.csv`          — per-scenario cost breakdown by asset type
-- `results/scenario_{id}/costs_by_zone.csv`          — per-scenario cost breakdown by zone
-- `results/scenario_{id}/balance_duals.csv`          — per-scenario balance duals (if enabled, non-distributed)
-- `results/costs.csv`                                — aggregate expected costs
-- `results/scenario_costs.csv`                       — per-scenario cost breakdown
-- `results/settings.json`                            — case + stochastic settings
-"""
-function write_outputs(case_path::AbstractString, sc::StochasticCase, bd_results::BendersResults)
-    inv_sys  = investment_system(sc)
-    settings = get_settings(sc)
-    results_dir = create_output_path(inv_sys, case_path)
-
-    scenario_to_subproblem_map, _ =
-        get_period_to_subproblem_mapping(map(s -> s.system, sc.scenarios))
-
-    subproblems_data = if settings.BendersSettings[:Distributed]
-        collect_distributed_data(bd_results)
-    else
-        collect_local_data(bd_results)
-    end
-
-    write_capacity(joinpath(results_dir, "capacity.csv"), inv_sys)
-
-    is_distributed = settings.BendersSettings[:Distributed]
-
-    for sc_r in sc.scenarios
-        sc_dir = joinpath(results_dir, "scenario_$(sc_r.id)")
-        mkpath(sc_dir)
-        subop_indices = scenario_to_subproblem_map[sc_r.id]
-        write_flows(joinpath(sc_dir, "flows.csv"), sc_r.system, subproblems_data.flows[subop_indices])
-        write_non_served_demand(joinpath(sc_dir, "non_served_demand.csv"), sc_r.system, subproblems_data.nsd[subop_indices])
-        write_storage_level(joinpath(sc_dir, "storage_level.csv"), sc_r.system, subproblems_data.storage_levels[subop_indices])
-        write_curtailment(joinpath(sc_dir, "curtailment.csv"), sc_r.system, subproblems_data.curtailment[subop_indices])
-        write_time_weights(joinpath(sc_dir, "time_weights.csv"), sc_r.system)
-
-        # All stochastic scenarios share the same investment period (index 1).
-        # Temporarily set period_index=1 so cost functions use the correct period.
-        _stochastic_set_period_index!(sc_r.system, 1)
-
-        # Detailed cost breakdown by type and zone
-        period_op_costs = aggregate_operational_costs(subproblems_data.operational_costs[subop_indices])
-        layout = get_output_layout(sc_r.system, :Costs)
-        costs  = get_detailed_costs_benders(sc_r.system, period_op_costs, settings)
-        write_cost_breakdown_files!(sc_dir, costs.discounted, layout;
-            prefix="costs", validate_model=nothing, discounted=true)
-        write_cost_breakdown_files!(sc_dir, costs.undiscounted, layout;
-            prefix="undiscounted_costs", validate_model=nothing, discounted=false)
-
-        # Balance duals per scenario (non-distributed only; distributed support can be added later)
-        if sc_r.system.settings.DualExportsEnabled && !is_distributed
-            sc_balance_duals = _collect_stochastic_benders_balance_duals(bd_results, subop_indices)
-            if !isempty(sc_balance_duals)
-                populate_constraint_duals_from_subproblems!(sc_r.system, sc_balance_duals, BalanceConstraint)
-            end
-            write_balance_duals(sc_dir, sc_r.system, 1.0)
-        end
-
-        _stochastic_set_period_index!(sc_r.system, sc_r.id)
-    end
-
-    _write_stochastic_benders_costs(results_dir, sc, bd_results, scenario_to_subproblem_map, settings)
-    write_settings(sc, joinpath(results_dir, "settings.json"))
-
-    return results_dir
-end
-
-"""Helper: write aggregate + per-scenario cost CSVs for a stochastic monolithic solve."""
-function _write_stochastic_costs(results_dir::AbstractString, model::Model)
-    R        = model.ext[:scenario_ids]
-    p        = model.ext[:scenario_probs]
-    opexmult = model.ext[:opexmult]
-
-    fixed_cost        = value(model[:eFixedCost])
-    expected_var_cost = value(model[:eVariableCost])
-    expected_co2_cost = haskey(model, :eExpectedCO2PriceCost) ?
-                        value(model[:eExpectedCO2PriceCost]) : 0.0
-    expected_op_cost  = expected_var_cost - expected_co2_cost
-
-    agg_df = DataFrame(
-        FixedCost            = [fixed_cost],
-        ExpectedVariableCost = [expected_op_cost],
-        ExpectedCO2PriceCost = [expected_co2_cost],
-        TotalExpectedCost    = [fixed_cost + expected_var_cost],
-    )
-    write_dataframe(joinpath(results_dir, "costs.csv"), agg_df)
-
-    sc_rows = map(R) do r
-        raw_var = value(model[:eRawVariableCostByScenario][r])
-        raw_co2 = haskey(model, :eRawCO2PriceCostByScenario) ?
-                  value(model[:eRawCO2PriceCostByScenario][r]) : 0.0
-        raw_op  = raw_var - raw_co2
-        (scenario_id          = r,
-         probability          = p[r],
-         RawVariableCost      = raw_op,
-         RawCO2PriceCost      = raw_co2,
-         RawTotalOpCost       = raw_var,
-         WeightedVariableCost = p[r] * opexmult * raw_op,
-         WeightedCO2PriceCost = p[r] * opexmult * raw_co2,
-         WeightedTotalOpCost  = p[r] * opexmult * raw_var)
-    end
-    write_dataframe(joinpath(results_dir, "scenario_costs.csv"), DataFrame(sc_rows))
-
-    return nothing
-end
-
-"""Helper: write aggregate + per-scenario cost CSVs for a stochastic Benders solve."""
-function _write_stochastic_benders_costs(
-    results_dir::AbstractString,
-    sc::StochasticCase,
-    bd_results::BendersResults,
-    scenario_to_subproblem_map::Dict{Int,Vector{Int}},
-    settings::NamedTuple,
-)
-    planning      = bd_results.planning_problem
-    R             = [s.id for s in sc.scenarios]
-    p             = Dict(s.id => s.probability for s in sc.scenarios)
-    discount_rate = settings.DiscountRate
+"""Helper: write aggregate and per-scenario cost CSVs for a stochastic monolithic solve."""
+function _write_stochastic_costs(results_dir::AbstractString, sc::StochasticCase, model::Model)
+    inv_sys       = investment_system(sc)
+    settings      = get_settings(sc)
+    R             = model.ext[:scenario_ids]
+    p             = model.ext[:scenario_probs]
+    opexmult      = model.ext[:opexmult]
     period_length = first(settings.PeriodLengths)
-    opexmult      = sum(1.0 / (1.0 + discount_rate)^i for i in 1:period_length)
 
-    subop_sol = bd_results.subop_sol
-    inv_sys   = investment_system(sc)
+    # Discounted: eFixedCost uses PV costs from planning_model!; eVariableCost is probability-weighted and discounted
+    disc_fixed = value(model[:eFixedCost])
+    disc_var   = value(model[:eVariableCost])
 
-    # Rebuild undiscounted fixed cost from the planning solution. inv_sys assets now hold
-    # Float64 capacity values (set by _update_stochastic_with_planning_solution!).
+    # Undiscounted fixed: undo PV discounting on assets, recompute with face-value costs
     undo_discount_fixed_costs!(inv_sys, settings)
-    unregister(planning, :eFixedCost)
-    unregister(planning, :eOMFixedCost)
-    unregister(planning, :eInvestmentFixedCost)
-    planning[:eFixedCost]           = AffExpr(0.0)
-    planning[:eOMFixedCost]         = AffExpr(0.0)
-    planning[:eInvestmentFixedCost] = AffExpr(0.0)
-    compute_fixed_costs!(inv_sys, planning)
-    planning[:eFixedCost] = planning[:eInvestmentFixedCost] + planning[:eOMFixedCost]
-    fixed_cost = value(planning[:eFixedCost])
+    unregister(model, :eFixedCost)
+    unregister(model, :eOMFixedCost)
+    unregister(model, :eInvestmentFixedCost)
+    model[:eFixedCost]           = AffExpr(0.0)
+    model[:eOMFixedCost]         = AffExpr(0.0)
+    model[:eInvestmentFixedCost] = AffExpr(0.0)
+    compute_fixed_costs!(inv_sys, model, :CF)
+    model[:eFixedCost] = model[:eInvestmentFixedCost] + model[:eOMFixedCost]
+    undisc_fixed = value(model[:eFixedCost])
 
-    expected_var_cost = sum(
-        p[r] * opexmult * sum(subop_sol[w].op_cost for w in scenario_to_subproblem_map[r])
-        for r in R
+    # Undiscounted variable: remove opexmult discounting, multiply by period length
+    undisc_var = period_length / opexmult * disc_var
+
+    aggregate_costs = (
+        eDiscountedFixedCost    = disc_fixed,
+        eDiscountedVariableCost = disc_var,
+        eFixedCost              = undisc_fixed,
+        eVariableCost           = undisc_var,
     )
+    write_costs(joinpath(results_dir, "costs.csv"), inv_sys, aggregate_costs)
+    write_undiscounted_costs(joinpath(results_dir, "undiscounted_costs.csv"), inv_sys, aggregate_costs)
 
-    agg_df = DataFrame(
-        FixedCost            = [fixed_cost],
-        ExpectedVariableCost = [expected_var_cost],
-        TotalExpectedCost    = [fixed_cost + expected_var_cost],
-    )
-    write_dataframe(joinpath(results_dir, "costs.csv"), agg_df)
-
-    sc_rows = map(R) do r
-        subop_indices      = scenario_to_subproblem_map[r]
-        weighted_var_total = p[r] * opexmult * sum(subop_sol[w].op_cost for w in subop_indices)
-        (scenario_id          = r,
-         probability          = p[r],
-         WeightedVariableCost = weighted_var_total)
+    # Per-scenario costs: fixed cost is shared; variable cost differs per scenario
+    sc_disc_rows = map(R) do r
+        disc_var_r = opexmult * value(model[:eRawVariableCostByScenario][r])
+        (scenario_id           = r,
+         probability           = p[r],
+         DiscountedFixedCost   = disc_fixed,
+         DiscountedVariableCost = disc_var_r,
+         DiscountedTotalCost   = disc_fixed + disc_var_r)
     end
-    write_dataframe(joinpath(results_dir, "scenario_costs.csv"), DataFrame(sc_rows))
+    write_dataframe(joinpath(results_dir, "scenario_costs.csv"), DataFrame(sc_disc_rows))
+
+    sc_undisc_rows = map(R) do r
+        disc_var_r   = opexmult * value(model[:eRawVariableCostByScenario][r])
+        undisc_var_r = period_length / opexmult * disc_var_r
+        (scenario_id = r,
+         probability = p[r],
+         FixedCost   = undisc_fixed,
+         VariableCost = undisc_var_r,
+         TotalCost   = undisc_fixed + undisc_var_r)
+    end
+    write_dataframe(joinpath(results_dir, "scenario_undiscounted_costs.csv"), DataFrame(sc_undisc_rows))
 
     return nothing
 end
@@ -441,20 +342,4 @@ function _stochastic_set_period_index!(system::System, pid::Int)
     for (_, td) in system.time_data
         td.period_index = pid
     end
-end
-
-"""Collect BalanceConstraint duals from a single scenario's Benders subproblems.
-
-All stochastic subproblems have period_index=1 after _reset_investment_period_index!,
-so collect_local_constraint_duals groups everything under key 1. The period key is
-stripped here so the caller receives the node_id → balance_id → time_dict mapping
-ready to pass to populate_constraint_duals_from_subproblems!.
-"""
-function _collect_stochastic_benders_balance_duals(
-    bd_results::BendersResults,
-    subop_indices::Vector{Int}
-)
-    scenario_subproblems = [bd_results.op_subproblem[w] for w in subop_indices]
-    duals_by_period = collect_local_constraint_duals(scenario_subproblems, BalanceConstraint)
-    return get(duals_by_period, 1, Dict{Symbol, Dict{Symbol, Dict}}())
 end

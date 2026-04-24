@@ -95,9 +95,13 @@ function configure_case(
     # Load case settings
     case_settings = copy(read_file(path))
     
-    # Check for BendersSettings path if Benders is the solution algorithm
+    # Check for BendersSettings path if Benders is the solution algorithm.
+    # case_settings.json lives in <case_root>/settings/, so the case root is
+    # dirname(dirname(path)). This is correct even when rel_path is a subdirectory
+    # (e.g. a stochastic scenario directory) rather than the case root itself.
     if case_settings[:SolutionAlgorithm] == "Benders"
-        case_settings = load_benders_settings(case_settings, rel_path)
+        case_root = dirname(dirname(abspath(path)))
+        case_settings = load_benders_settings(case_settings, case_root)
     end
     
     return configure_case(case_settings)

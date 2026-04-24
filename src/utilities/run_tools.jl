@@ -178,14 +178,14 @@ function case_cleanup()
 end
 
 """
-    run_stochastic_case(case_path; kwargs...) -> (sc::StochasticCase, solution::Any)
+    run_stochastic_case(case_path; kwargs...) -> (sc::StochasticCase, solution::Model, cpu_time::Float64)
 
-Load, solve, and return results for a stochastic capacity expansion case. This is the
-main entry point for running a stochastic workflow analogous to `run_case`.
+Load, solve, and return results for a stochastic capacity expansion case using the
+monolithic (extensive form) solver.
 
 The entry-point file `settings/stochastic_data.json` defines the scenarios,
-probabilities, and `PolicyMode`. The solution algorithm (`"Monolithic"` or
-`"Benders"`) is determined by `SolutionAlgorithm` in `settings/case_settings.json`.
+probabilities, and `PolicyMode`. `SolutionAlgorithm` in `settings/case_settings.json`
+must be `"Monolithic"`.
 
 # Arguments
 - `case_path::AbstractString`: Path to the stochastic case directory.
@@ -200,33 +200,26 @@ probabilities, and `PolicyMode`. The solution algorithm (`"Monolithic"` or
 - `log_file_path::AbstractString`: Path to the log file. Defaults to `<case_path>/<case_name>.log`.
 - `log_file_attribution::Bool=true`: Include source file attribution in log messages.
 
-## Optimizer (Monolithic)
+## Optimizer
 - `optimizer::DataType=HiGHS.Optimizer`: Optimizer constructor.
 - `optimizer_env::Any=nothing`: Optional optimizer environment (e.g. Gurobi.Env()).
 - `optimizer_attributes::Tuple`: Solver settings. Default: IPM with no crossover.
 
-## Optimizer (Benders)
-- `planning_optimizer::DataType=HiGHS.Optimizer`: Optimizer for the master problem.
-- `subproblem_optimizer::DataType=HiGHS.Optimizer`: Optimizer for the subproblems.
-- `planning_optimizer_attributes::Tuple`: Solver settings for the master problem.
-- `subproblem_optimizer_attributes::Tuple`: Solver settings for the subproblems.
-
 # Returns
 - `sc::StochasticCase`: The solved stochastic case object (holds all scenarios).
-- `solution`: `Model` for Monolithic, `BendersResults` for Benders.
-- `cpu_time::Float64`: Wall-clock optimization time in seconds.
+- `solution::Model`: The solved JuMP model (extensive form).
+- `cpu_time::Float64`: Optimization wall-clock time in seconds.
 
 # Examples
 
-## Monolithic with HiGHS (default)
+## HiGHS (default)
 ```julia
 using MacroEnergy
-using HiGHS
 
 (sc, solution, cpu_time) = run_stochastic_case(@__DIR__)
 ```
 
-## Monolithic with Gurobi
+## Gurobi
 ```julia
 using MacroEnergy
 using Gurobi
@@ -235,20 +228,6 @@ using Gurobi
     @__DIR__;
     optimizer = Gurobi.Optimizer,
     optimizer_attributes = ("Method" => 2, "Crossover" => 0, "BarConvTol" => 1e-3)
-)
-```
-
-## Benders with Gurobi
-```julia
-using MacroEnergy
-using Gurobi
-
-(sc, solution, cpu_time) = run_stochastic_case(
-    @__DIR__;
-    planning_optimizer              = Gurobi.Optimizer,
-    subproblem_optimizer            = Gurobi.Optimizer,
-    planning_optimizer_attributes   = ("Method" => 2, "Crossover" => 0, "BarConvTol" => 1e-3),
-    subproblem_optimizer_attributes = ("Method" => 2, "Crossover" => 1, "BarConvTol" => 1e-3, "Threads" => 1),
 )
 ```
 """
@@ -260,15 +239,10 @@ function run_stochastic_case(
     log_to_file::Bool=true,
     log_file_path::AbstractString=joinpath(case_path, "$(basename(case_path)).log"),
     log_file_attribution::Bool=true,
-    # Monolithic
+    # Optimizer
     optimizer::DataType=HiGHS.Optimizer,
     optimizer_env::Any=nothing,
     optimizer_attributes::Tuple=("solver" => "ipm", "run_crossover" => "off", "ipm_optimality_tolerance" => 1e-3),
-    # Benders
-    planning_optimizer::DataType=HiGHS.Optimizer,
-    subproblem_optimizer::DataType=HiGHS.Optimizer,
-    planning_optimizer_attributes::Tuple=("solver" => "ipm", "run_crossover" => "off", "ipm_optimality_tolerance" => 1e-3),
-    subproblem_optimizer_attributes::Tuple=("solver" => "ipm", "run_crossover" => "on",  "ipm_optimality_tolerance" => 1e-3),
 )
     atexit(() -> try case_cleanup() catch; end)
 
@@ -279,36 +253,16 @@ function run_stochastic_case(
 
         sc = load_stochastic_case(case_path)
 
-        opt = if isa(solution_algorithm(sc), Monolithic)
-            create_optimizer(optimizer, optimizer_env, optimizer_attributes)
-        elseif isa(solution_algorithm(sc), Benders)
-            create_optimizer_benders(
-                planning_optimizer, subproblem_optimizer,
-                planning_optimizer_attributes, subproblem_optimizer_attributes,
-            )
-        else
-            error("SolutionAlgorithm must be \"Monolithic\" or \"Benders\" for stochastic cases.")
+        if !isa(solution_algorithm(sc), Monolithic)
+            error("run_stochastic_case only supports SolutionAlgorithm = \"Monolithic\".")
         end
 
-        start_solve = time()
-        alg = solution_algorithm(sc)
-        (sc, solution, cpu_time) = if isa(alg, Benders)
-            solve_case(sc, opt, alg; case_path = case_path)
-        else
-            solve_case(sc, opt, alg)
-        end
-        cpu_optimization = time() - start_solve
+        opt = create_optimizer(optimizer, optimizer_env, optimizer_attributes)
+
+        (sc, solution, cpu_time) = solve_case(sc, opt)
 
         @info("Writing stochastic outputs")
-        results_dir = write_outputs(case_path, sc, solution)
-
-        runtime_df = DataFrame(
-            Optimization_CPU_sec = [cpu_optimization],
-            Case_Total_CPU_sec   = [cpu_time],
-        )
-        runtime_csv_path = joinpath(results_dir, "Case_Runtime_Summary.csv")
-        CSV.write(runtime_csv_path, runtime_df)
-        @info("Case runtime summary written to $runtime_csv_path")
+        write_outputs(case_path, sc, solution)
 
         return (sc, solution, cpu_time)
     catch e
